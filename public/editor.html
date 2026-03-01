@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PlantUML Editor</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/default.min.css">
+<style>
+  :root {
+    --bg: #f5f5f5; --surface: #fff; --border: #ddd; --text: #222;
+    --toolbar-bg: #1a73e8; --toolbar-text: #fff; --accent: #1a73e8;
+    --status-bg: #e8f0fe; --status-text: #1a73e8;
+    --hover: rgba(0,0,0,.06);
+  }
+  .dark {
+    --bg: #1e1e1e; --surface: #252526; --border: #3c3c3c; --text: #ccc;
+    --toolbar-bg: #2d2d30; --toolbar-text: #ccc; --accent: #569cd6;
+    --status-bg: #264f78; --status-text: #9cdcfe;
+    --hover: rgba(255,255,255,.08);
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+
+  /* Toolbar */
+  .toolbar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 12px; background: var(--toolbar-bg); color: var(--toolbar-text);
+    flex-shrink: 0; z-index: 10; box-shadow: 0 2px 4px rgba(0,0,0,.2);
+  }
+  .toolbar .brand { font-weight: 700; font-size: 15px; margin-right: 12px; letter-spacing: -.3px; }
+  .toolbar .sep { width: 1px; height: 22px; background: rgba(255,255,255,.25); margin: 0 4px; }
+  .toolbar button, .toolbar label, .toolbar select {
+    background: rgba(255,255,255,.12); border: none; color: inherit;
+    padding: 5px 10px; border-radius: 4px; font-size: 12px; cursor: pointer;
+    transition: background .15s;
+  }
+  .toolbar button:hover, .toolbar label:hover { background: rgba(255,255,255,.22); }
+  .toolbar select { padding: 4px 6px; }
+  .toolbar .file-input { display: none; }
+  .toolbar .status {
+    margin-left: auto; font-size: 11px; padding: 3px 10px;
+    border-radius: 10px; background: rgba(255,255,255,.15);
+  }
+  .toolbar .status.ok { background: rgba(76,175,80,.3); }
+  .toolbar .status.err { background: rgba(244,67,54,.3); }
+  .toolbar .status.loading { background: rgba(255,193,7,.3); }
+
+  /* Main area */
+  .main { display: flex; flex: 1; overflow: hidden; }
+  .editor-pane, .preview-pane {
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .editor-pane { flex: 1; min-width: 200px; background: var(--surface); border-right: 1px solid var(--border); }
+  .preview-pane { flex: 1; min-width: 200px; background: var(--bg); }
+
+  .pane-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 12px; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .5px; color: var(--accent);
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .pane-header .controls { display: flex; gap: 4px; }
+  .pane-header button {
+    background: none; border: 1px solid var(--border); color: var(--text);
+    padding: 2px 8px; border-radius: 3px; font-size: 11px; cursor: pointer;
+  }
+  .pane-header button:hover { background: var(--hover); }
+  .pane-header button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* CodeMirror overrides */
+  .editor-wrap { flex: 1; overflow: hidden; }
+  .editor-wrap .CodeMirror { height: 100%; font-size: 13px; font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace; }
+
+  /* Preview */
+  .preview-wrap {
+    flex: 1; overflow: auto; display: flex; align-items: flex-start;
+    justify-content: center; padding: 16px; position: relative;
+  }
+  .preview-wrap svg { max-width: none; transition: transform .1s; transform-origin: top left; }
+  .preview-wrap svg text::selection { background: transparent; color: inherit; }
+  .preview-wrap svg text::-moz-selection { background: transparent; color: inherit; }
+  .preview-wrap svg .sel-highlight { fill: rgba(51,122,204,.3); pointer-events: none; }
+  .preview-wrap img { max-width: none; transition: transform .1s; transform-origin: top left; }
+  .preview-wrap .error-msg {
+    color: #f44336; background: rgba(244,67,54,.08); border: 1px solid rgba(244,67,54,.2);
+    border-radius: 6px; padding: 16px 20px; font-size: 13px; white-space: pre-wrap;
+    max-width: 600px; margin: 40px auto;
+  }
+
+  /* Resizer */
+  .resizer {
+    width: 5px; cursor: col-resize; background: var(--border);
+    flex-shrink: 0; transition: background .15s; z-index: 5;
+  }
+  .resizer:hover, .resizer.active { background: var(--accent); }
+
+  /* Zoom indicator */
+  .zoom-indicator {
+    position: absolute; bottom: 12px; right: 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; padding: 3px 8px; font-size: 11px;
+    opacity: .8;
+  }
+
+  /* File list sidebar */
+  .file-sidebar {
+    width: 0; overflow: hidden; background: var(--surface);
+    border-right: 1px solid var(--border); transition: width .2s;
+    flex-shrink: 0; display: flex; flex-direction: column;
+  }
+  .file-sidebar.open { width: 220px; }
+  .file-sidebar .sidebar-header {
+    padding: 8px 12px; font-size: 12px; font-weight: 600;
+    border-bottom: 1px solid var(--border); display: flex;
+    align-items: center; justify-content: space-between;
+  }
+  .file-sidebar .sidebar-header button { background: none; border: none; color: var(--text); cursor: pointer; font-size: 16px; }
+  .file-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .file-list .file-item {
+    padding: 6px 12px; font-size: 12px; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border-left: 3px solid transparent;
+  }
+  .file-list .file-item:hover { background: var(--hover); }
+  .file-list .file-item.active { border-left-color: var(--accent); background: var(--hover); font-weight: 600; }
+
+  /* Collapsed pane states */
+  .editor-pane.collapsed { flex: 0 0 0 !important; width: 0 !important; min-width: 0 !important; overflow: hidden; border-right: none; }
+  .preview-pane.collapsed { flex: 0 0 0 !important; width: 0 !important; min-width: 0 !important; overflow: hidden; }
+  .editor-pane.collapsed + .resizer { display: none; }
+  .resizer:has(+ .preview-pane.collapsed) { display: none; }
+  .pane-header button.collapse-btn { font-size: 14px; line-height: 1; padding: 2px 6px; }
+  .pane-header button.collapse-btn.restore { font-size: 11px; padding: 2px 8px; background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* Settings modal */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45);
+    z-index: 100; align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 24px; min-width: 420px; max-width: 90vw;
+    box-shadow: 0 8px 32px rgba(0,0,0,.3);
+  }
+  .modal h3 { margin-bottom: 16px; font-size: 15px; color: var(--accent); }
+  .modal label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; margin-top: 12px; }
+  .modal input[type="text"] {
+    width: 100%; padding: 7px 10px; border: 1px solid var(--border); border-radius: 4px;
+    background: var(--bg); color: var(--text); font-size: 13px; font-family: 'Consolas', monospace;
+  }
+  .modal input[type="text"]:focus { outline: none; border-color: var(--accent); }
+  .modal .hint { font-size: 11px; opacity: .6; margin-top: 2px; }
+  .modal .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+  .modal .modal-actions button {
+    padding: 6px 16px; border-radius: 4px; font-size: 12px; cursor: pointer; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text);
+  }
+  .modal .modal-actions button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .modal .modal-actions button:hover { opacity: .85; }
+</style>
+</head>
+<body>
+
+<!-- Toolbar -->
+<div class="toolbar">
+  <span class="brand" style="display:inline-flex;flex-direction:column;align-items:flex-end;">&#9670; PlantUML Editor<span style="font-size:9px;font-weight:400;opacity:.7;">by Wonkday</span></span>
+  <div class="sep"></div>
+  <button id="btnNew" title="New diagram (reset editor)">&#128196; New</button>
+  <button id="btnFiles" title="Browse .puml files">&#128193; Files</button>
+  <button id="btnOpen" title="Open local file">&#128194; Open</button>
+  <input type="file" id="fileInput" class="file-input" accept=".puml,.plantuml,.pu,.txt,.wsd">
+  <button id="btnSave" title="Save to disk">&#128190; Save</button>
+  <div class="sep"></div>
+  <button id="btnRefresh" title="Render now (Ctrl+Enter)">&#9654; Render</button>
+  <label title="Auto-render on change">
+    <input type="checkbox" id="chkAuto" checked> Auto
+  </label>
+  <div class="sep"></div>
+  <button id="btnSvg" title="Export SVG">SVG</button>
+  <button id="btnPng" title="Export PNG">PNG</button>
+  <div class="sep"></div>
+  <button id="btnZoomIn" title="Zoom in">&#43;</button>
+  <button id="btnZoomOut" title="Zoom out">&#8722;</button>
+  <button id="btnFit" title="Fit to view">Fit</button>
+  <div class="sep"></div>
+  <button id="btnSettings" title="Settings">&#9881; Settings</button>
+  <button id="btnTheme" title="Toggle dark/light">&#127763;</button>
+  <span class="status" id="status">Ready</span>
+</div>
+
+<!-- Main content -->
+<div class="main">
+  <!-- File sidebar -->
+  <div class="file-sidebar" id="fileSidebar">
+    <div class="sidebar-header">
+      <span>PUML Files</span>
+      <button id="btnCloseSidebar">&times;</button>
+    </div>
+    <div class="file-list" id="fileList"></div>
+  </div>
+
+  <!-- Editor -->
+  <div class="editor-pane" id="editorPane">
+    <div class="pane-header">
+      <span id="fileName">editor</span>
+      <div class="controls">
+        <button id="btnWrap">Wrap</button>
+        <button id="btnNumbers" class="active">Ln</button>
+        <button id="btnCollapseEditor" class="collapse-btn" title="Collapse editor (maximize preview)">&#9668;</button>
+      </div>
+    </div>
+    <div class="editor-wrap">
+      <textarea id="editor"></textarea>
+    </div>
+  </div>
+
+  <!-- Resizer -->
+  <div class="resizer" id="resizer"></div>
+
+  <!-- Preview -->
+  <div class="preview-pane" id="previewPane">
+    <div class="pane-header">
+      <span>preview</span>
+      <div class="controls">
+        <button id="btnCollapsePreview" class="collapse-btn" title="Collapse preview (maximize editor)">&#9658;</button>
+        <span id="diagramInfo" style="font-weight:400; text-transform:none;"></span>
+      </div>
+    </div>
+    <div class="preview-wrap" id="previewWrap">
+      <div style="color:var(--text); opacity:.4; margin-top:80px; text-align:center;">
+        <p style="font-size:32px;">&#9670;</p>
+        <p style="margin-top:8px;">Paste or open a PlantUML diagram to begin</p>
+        <p style="margin-top:4px; font-size:12px;">Ctrl+Enter to render</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings modal -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal">
+    <h3>&#9881; Settings</h3>
+    <label for="cfgKrokiUrl">Kroki PlantUML API URL</label>
+    <input type="text" id="cfgKrokiUrl" placeholder="http://hostname:8000/plantuml/svg">
+    <div class="hint">Base URL for Kroki PlantUML rendering (SVG endpoint). PNG export will derive from this.</div>
+    <label for="cfgDebounce">Auto-render debounce (ms)</label>
+    <input type="text" id="cfgDebounce" placeholder="800">
+    <div class="hint">Delay in milliseconds after last keystroke before auto-rendering.</div>
+    <div class="modal-actions">
+      <button id="btnSettingsCancel">Cancel</button>
+      <button id="btnSettingsReset">Reset Defaults</button>
+      <button id="btnSettingsSave" class="primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Scripts -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/search.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/searchcursor.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/dialog/dialog.min.js"></script>
+<script>
+(function() {
+  const DEFAULT_KROKI_HOST = window.location.hostname || 'ilcepoc3503';
+  const DEFAULT_KROKI_URL = `http://${DEFAULT_KROKI_HOST}:8000/plantuml/svg`;
+  const DEFAULT_DEBOUNCE = 800;
+
+  function getKrokiUrl() {
+    return localStorage.getItem('puml-kroki-url') || DEFAULT_KROKI_URL;
+  }
+  function getDebounceMs() {
+    return parseInt(localStorage.getItem('puml-debounce'), 10) || DEFAULT_DEBOUNCE;
+  }
+
+  // State
+  let zoom = 1;
+  let lastSvg = '';
+  let renderTimer = null;
+  let currentFileName = '';
+
+  // Elements
+  const $ = id => document.getElementById(id);
+  const statusEl = $('status');
+  const previewWrap = $('previewWrap');
+  const fileNameEl = $('fileName');
+  const diagramInfo = $('diagramInfo');
+
+  // CodeMirror setup
+  CodeMirror.defineSimpleMode && null;
+  const cm = CodeMirror.fromTextArea($('editor'), {
+    lineNumbers: true,
+    matchBrackets: true,
+    autoCloseBrackets: true,
+    tabSize: 4,
+    indentWithTabs: true,
+    lineWrapping: false,
+    theme: 'default',
+  });
+
+  const DEFAULT_DIAGRAM = `@startuml
+actor User
+participant "Frontend" as FE
+participant "Backend" as BE
+database "Database" as DB
+
+User -> FE : Request
+FE -> BE : API Call
+BE -> DB : Query
+DB --> BE : Result
+BE --> FE : Response
+FE --> User : Display
+@enduml`;
+
+  // Restore from cache or use default
+  const cached = localStorage.getItem('puml-editor-content');
+  cm.setValue(cached !== null ? cached : DEFAULT_DIAGRAM);
+
+  // Persist on every change
+  cm.on('change', () => localStorage.setItem('puml-editor-content', cm.getValue()));
+
+  // --- Rendering ---
+  function setStatus(text, type) {
+    statusEl.textContent = text;
+    statusEl.className = 'status' + (type ? ' ' + type : '');
+  }
+
+  async function render() {
+    const src = cm.getValue().trim();
+    if (!src) { previewWrap.innerHTML = ''; setStatus('Empty', ''); return; }
+
+    setStatus('Rendering...', 'loading');
+    try {
+      const resp = await fetch(getKrokiUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: src,
+      });
+      if (!resp.ok) {
+        const errText = await resp.text();
+        throw new Error(errText || `HTTP ${resp.status}`);
+      }
+      lastSvg = await resp.text();
+      displaySvg(lastSvg);
+
+      const lines = src.split('\n').length;
+      const bytes = new Blob([src]).size;
+      diagramInfo.textContent = `${lines} lines | ${(bytes / 1024).toFixed(1)} KB`;
+      setStatus('OK', 'ok');
+    } catch (e) {
+      previewWrap.innerHTML = `<div class="error-msg">Render Error:\n${e.message}</div>`;
+      setStatus('Error', 'err');
+    }
+  }
+
+  function displaySvg(svgText) {
+    previewWrap.innerHTML = svgText;
+    const svg = previewWrap.querySelector('svg');
+    if (svg) {
+      svg.style.transform = `scale(${zoom})`;
+      svg.removeAttribute('width');
+      svg.removeAttribute('height');
+      svg.style.maxWidth = 'none';
+    }
+    updateZoomIndicator();
+  }
+
+  function scheduleRender() {
+    if (!$('chkAuto').checked) return;
+    clearTimeout(renderTimer);
+    renderTimer = setTimeout(render, getDebounceMs());
+  }
+
+  cm.on('change', scheduleRender);
+
+  // --- Zoom ---
+  function setZoom(z) {
+    zoom = Math.max(0.1, Math.min(5, z));
+    const svg = previewWrap.querySelector('svg');
+    if (svg) svg.style.transform = `scale(${zoom})`;
+    updateZoomIndicator();
+  }
+
+  function updateZoomIndicator() {
+    let ind = previewWrap.querySelector('.zoom-indicator');
+    if (!ind) { ind = document.createElement('div'); ind.className = 'zoom-indicator'; previewWrap.appendChild(ind); }
+    ind.textContent = `${Math.round(zoom * 100)}%`;
+  }
+
+  $('btnZoomIn').onclick = () => setZoom(zoom + 0.15);
+  $('btnZoomOut').onclick = () => setZoom(zoom - 0.15);
+  $('btnFit').onclick = () => {
+    const svg = previewWrap.querySelector('svg');
+    if (!svg) return;
+    svg.style.transform = 'scale(1)';
+    const svgRect = svg.getBoundingClientRect();
+    const wrapRect = previewWrap.getBoundingClientRect();
+    const fitZ = Math.min(wrapRect.width / svgRect.width, wrapRect.height / svgRect.height, 2) * 0.95;
+    setZoom(fitZ);
+  };
+
+  // Mouse wheel zoom on preview
+  previewWrap.addEventListener('wheel', (e) => {
+    if (e.ctrlKey) {
+      e.preventDefault();
+      setZoom(zoom + (e.deltaY < 0 ? 0.1 : -0.1));
+    }
+  }, { passive: false });
+
+  // --- Custom SVG text selection highlight ---
+  function clearHighlights() {
+    const svg = previewWrap.querySelector('svg');
+    if (!svg) return;
+    svg.querySelectorAll('.sel-highlight').forEach(r => r.remove());
+  }
+
+  function drawHighlights() {
+    clearHighlights();
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) return;
+    const svg = previewWrap.querySelector('svg');
+    if (!svg) return;
+
+    const range = sel.getRangeAt(0);
+    const textEls = svg.querySelectorAll('text');
+    const pad = 2;
+
+    textEls.forEach(t => {
+      if (!range.intersectsNode(t)) return;
+      try {
+        const bbox = t.getBBox();
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('class', 'sel-highlight');
+        rect.setAttribute('x', bbox.x - pad);
+        rect.setAttribute('y', bbox.y - pad);
+        rect.setAttribute('width', bbox.width + pad * 2);
+        rect.setAttribute('height', bbox.height + pad * 2);
+        rect.setAttribute('rx', '2');
+        t.parentNode.insertBefore(rect, t);
+      } catch (e) {}
+    });
+  }
+
+  document.addEventListener('selectionchange', drawHighlights);
+  previewWrap.addEventListener('mousedown', () => {
+    clearHighlights();
+  });
+
+  // --- Keyboard shortcuts ---
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); render(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveFile(); }
+  });
+
+  // --- Render button ---
+  $('btnRefresh').onclick = render;
+
+  // --- File operations ---
+  $('btnNew').onclick = () => {
+    if (cm.getValue().trim() && !confirm('Discard current diagram and start fresh?')) return;
+    cm.setValue(DEFAULT_DIAGRAM);
+    currentFileName = '';
+    fileNameEl.textContent = 'editor';
+    localStorage.removeItem('puml-editor-content');
+    render();
+  };
+
+  $('btnOpen').onclick = () => $('fileInput').click();
+  $('fileInput').onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    currentFileName = file.name;
+    fileNameEl.textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = (ev) => { cm.setValue(ev.target.result); render(); };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  $('btnSave').onclick = saveFile;
+  function saveFile() {
+    const src = cm.getValue();
+    const name = currentFileName || 'diagram.puml';
+    const blob = new Blob([src], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setStatus('Saved', 'ok');
+  }
+
+  // --- Export ---
+  $('btnSvg').onclick = () => {
+    if (!lastSvg) { setStatus('Nothing to export', 'err'); return; }
+    const blob = new Blob([lastSvg], { type: 'image/svg+xml' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (currentFileName || 'diagram').replace(/\.puml$/i, '') + '.svg';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  $('btnPng').onclick = async () => {
+    if (!lastSvg) { setStatus('Nothing to export', 'err'); return; }
+    try {
+      const pngUrl = getKrokiUrl().replace('/svg', '/png');
+      const resp = await fetch(pngUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: cm.getValue(),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = (currentFileName || 'diagram').replace(/\.puml$/i, '') + '.png';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      setStatus('PNG export failed', 'err');
+    }
+  };
+
+  // --- Theme toggle ---
+  $('btnTheme').onclick = () => {
+    document.body.classList.toggle('dark');
+    const isDark = document.body.classList.contains('dark');
+    cm.setOption('theme', isDark ? 'material-darker' : 'default');
+    localStorage.setItem('puml-theme', isDark ? 'dark' : 'light');
+  };
+  if (localStorage.getItem('puml-theme') === 'dark') {
+    document.body.classList.add('dark');
+    cm.setOption('theme', 'material-darker');
+  }
+
+  // --- Editor toggles ---
+  $('btnWrap').onclick = function() {
+    const wrap = !cm.getOption('lineWrapping');
+    cm.setOption('lineWrapping', wrap);
+    this.classList.toggle('active', wrap);
+  };
+  $('btnNumbers').onclick = function() {
+    const show = !cm.getOption('lineNumbers');
+    cm.setOption('lineNumbers', show);
+    this.classList.toggle('active', show);
+  };
+
+  // --- Resizer drag ---
+  const resizer = $('resizer');
+  const editorPane = $('editorPane');
+  const previewPane = $('previewPane');
+  let isResizing = false;
+
+  resizer.addEventListener('mousedown', (e) => {
+    isResizing = true;
+    resizer.classList.add('active');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!isResizing) return;
+    const container = document.querySelector('.main');
+    const rect = container.getBoundingClientRect();
+    const sidebar = $('fileSidebar');
+    const sidebarW = sidebar.classList.contains('open') ? sidebar.offsetWidth : 0;
+    const offset = e.clientX - rect.left - sidebarW;
+    const total = rect.width - sidebarW - resizer.offsetWidth;
+    const pct = Math.max(15, Math.min(85, (offset / total) * 100));
+    editorPane.style.flex = 'none';
+    editorPane.style.width = pct + '%';
+    previewPane.style.flex = '1';
+    cm.refresh();
+  });
+  document.addEventListener('mouseup', () => {
+    if (!isResizing) return;
+    isResizing = false;
+    resizer.classList.remove('active');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
+
+  // --- File sidebar ---
+  $('btnFiles').onclick = () => {
+    const sb = $('fileSidebar');
+    sb.classList.toggle('open');
+    if (sb.classList.contains('open')) loadFileList();
+    setTimeout(() => cm.refresh(), 250);
+  };
+  $('btnCloseSidebar').onclick = () => {
+    $('fileSidebar').classList.remove('open');
+    setTimeout(() => cm.refresh(), 250);
+  };
+
+  function loadFileList() {
+    const list = $('fileList');
+    list.innerHTML = '<div style="padding:12px;font-size:12px;opacity:.6;">Drop .puml files onto this page<br>or use Open button to load files.<br><br>Loaded files appear here.</div>';
+  }
+
+  // --- Drag & drop ---
+  document.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  document.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    currentFileName = file.name;
+    fileNameEl.textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = (ev) => { cm.setValue(ev.target.result); render(); };
+    reader.readAsText(file);
+  });
+
+  // --- Collapse / Maximize panes ---
+  const btnCollapseEditor = $('btnCollapseEditor');
+  const btnCollapsePreview = $('btnCollapsePreview');
+
+  function updateCollapseButtons() {
+    const editorCollapsed = editorPane.classList.contains('collapsed');
+    const previewCollapsed = previewPane.classList.contains('collapsed');
+    // Editor button
+    btnCollapseEditor.innerHTML = previewCollapsed ? '&#9654; Preview' : '&#9668;';
+    btnCollapseEditor.title = previewCollapsed ? 'Restore split view' : 'Collapse editor (maximize preview)';
+    btnCollapseEditor.classList.toggle('restore', previewCollapsed);
+    // Preview button: show restore when editor is collapsed
+    if (editorCollapsed) {
+      btnCollapsePreview.innerHTML = '&#9664; Editor';
+      btnCollapsePreview.title = 'Restore split view';
+      btnCollapsePreview.classList.add('restore');
+    } else {
+      btnCollapsePreview.innerHTML = '&#9658;';
+      btnCollapsePreview.title = 'Collapse preview (maximize editor)';
+      btnCollapsePreview.classList.remove('restore');
+    }
+  }
+
+  // Editor's button: toggle between "preview maximized" and split
+  btnCollapseEditor.onclick = () => {
+    if (previewPane.classList.contains('collapsed')) {
+      previewPane.classList.remove('collapsed');
+    } else {
+      editorPane.classList.add('collapsed');
+      previewPane.classList.remove('collapsed');
+    }
+    updateCollapseButtons();
+    setTimeout(() => cm.refresh(), 250);
+  };
+
+  // Preview's button: if editor is collapsed → restore split; otherwise collapse preview
+  btnCollapsePreview.onclick = () => {
+    if (editorPane.classList.contains('collapsed')) {
+      editorPane.classList.remove('collapsed');
+    } else {
+      previewPane.classList.add('collapsed');
+      editorPane.classList.remove('collapsed');
+    }
+    updateCollapseButtons();
+    setTimeout(() => cm.refresh(), 250);
+  };
+
+  // --- Settings modal ---
+  const settingsModal = $('settingsModal');
+  const cfgKrokiUrl = $('cfgKrokiUrl');
+  const cfgDebounce = $('cfgDebounce');
+
+  $('btnSettings').onclick = () => {
+    cfgKrokiUrl.value = getKrokiUrl();
+    cfgDebounce.value = getDebounceMs();
+    settingsModal.classList.add('open');
+  };
+
+  $('btnSettingsCancel').onclick = () => settingsModal.classList.remove('open');
+
+  settingsModal.onclick = (e) => {
+    if (e.target === settingsModal) settingsModal.classList.remove('open');
+  };
+
+  $('btnSettingsReset').onclick = () => {
+    cfgKrokiUrl.value = DEFAULT_KROKI_URL;
+    cfgDebounce.value = DEFAULT_DEBOUNCE;
+  };
+
+  $('btnSettingsSave').onclick = () => {
+    const url = cfgKrokiUrl.value.trim();
+    const debounce = parseInt(cfgDebounce.value, 10);
+    if (url) localStorage.setItem('puml-kroki-url', url);
+    else localStorage.removeItem('puml-kroki-url');
+    if (debounce > 0) localStorage.setItem('puml-debounce', debounce);
+    else localStorage.removeItem('puml-debounce');
+    settingsModal.classList.remove('open');
+    setStatus('Settings saved', 'ok');
+  };
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && settingsModal.classList.contains('open')) settingsModal.classList.remove('open');
+  });
+
+})();
+</script>
+</body>
+</html>

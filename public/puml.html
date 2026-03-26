@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/default.min.css">
+<link rel="stylesheet" href="/toolbar.css">
 <style>
   :root {
     --bg: #f5f5f5; --surface: #fff; --border: #ddd; --text: #222;
@@ -23,30 +24,6 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); }
   body { display: flex; flex-direction: column; overflow: hidden; }
-
-  /* Toolbar */
-  .toolbar {
-    display: flex; align-items: center; gap: 6px;
-    padding: 6px 12px; background: var(--toolbar-bg); color: var(--toolbar-text);
-    flex-shrink: 0; z-index: 10; box-shadow: 0 2px 4px rgba(0,0,0,.2);
-  }
-  .toolbar .brand { font-weight: 700; font-size: 15px; margin-right: 12px; letter-spacing: -.3px; }
-  .toolbar .sep { width: 1px; height: 22px; background: rgba(255,255,255,.25); margin: 0 4px; }
-  .toolbar button, .toolbar label, .toolbar select {
-    background: rgba(255,255,255,.12); border: none; color: inherit;
-    padding: 5px 10px; border-radius: 4px; font-size: 12px; cursor: pointer;
-    transition: background .15s;
-  }
-  .toolbar button:hover, .toolbar label:hover { background: rgba(255,255,255,.22); }
-  .toolbar select { padding: 4px 6px; }
-  .toolbar .file-input { display: none; }
-  .toolbar .status {
-    margin-left: auto; font-size: 11px; padding: 3px 10px;
-    border-radius: 10px; background: rgba(255,255,255,.15);
-  }
-  .toolbar .status.ok { background: rgba(76,175,80,.3); }
-  .toolbar .status.err { background: rgba(244,67,54,.3); }
-  .toolbar .status.loading { background: rgba(255,193,7,.3); }
 
   /* Main area */
   .main { display: flex; flex: 1; overflow: hidden; }
@@ -133,8 +110,9 @@
   .preview-pane.collapsed { flex: 0 0 0 !important; width: 0 !important; min-width: 0 !important; overflow: hidden; }
   .editor-pane.collapsed + .resizer { display: none; }
   .resizer:has(+ .preview-pane.collapsed) { display: none; }
-  .pane-header button.collapse-btn { font-size: 14px; line-height: 1; padding: 2px 6px; }
-  .pane-header button.collapse-btn.restore { font-size: 11px; padding: 2px 8px; background: var(--accent); color: #fff; border-color: var(--accent); }
+  .pane-header button.collapse-btn { font-size: 14px; line-height: 1; padding: 2px 6px; opacity: .6; }
+  .pane-header button.collapse-btn:hover { opacity: 1; background: var(--hover); }
+  .pane-header button.collapse-btn.restore { font-size: 11px; padding: 2px 8px; background: var(--accent); color: #fff; border-color: var(--accent); opacity: 1; }
 
   /* Settings modal */
   .modal-overlay {
@@ -188,6 +166,14 @@
   }
   .share-popover .share-meta { font-size: 11px; opacity: .6; margin-top: 8px; }
 
+  /* Mermaid modal textarea */
+  .modal textarea {
+    width: 100%; min-height: 200px; padding: 10px; border: 1px solid var(--border); border-radius: 4px;
+    background: var(--bg); color: var(--text); font-size: 13px; font-family: 'Consolas', monospace;
+    resize: vertical; line-height: 1.5;
+  }
+  .modal textarea:focus { outline: none; border-color: var(--accent); }
+
   /* Toast */
   .toast {
     position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
@@ -201,30 +187,57 @@
 <body>
 
 <!-- Toolbar -->
-<div class="toolbar">
-  <span class="brand" style="display:inline-flex;flex-direction:column;align-items:flex-end;">&#9670; PlantUML Editor<span style="font-size:9px;font-weight:400;opacity:.7;">by Wonkday</span></span>
+<div class="toolbar-row">
+  <span class="brand"><span class="brand-name">&#9670; Diagram Editor</span><span class="brand-sub">by Rohit</span></span>
+  <a href="/" class="tab active">PlantUML</a>
+  <a href="/mermaid" class="tab">Mermaid</a>
+  <a href="/gliffy" class="tab">Gliffy</a>
   <div class="sep"></div>
-  <button id="btnNew" title="New diagram (reset editor)">&#128196; New</button>
-  <button id="btnFiles" title="Browse .puml files">&#128193; Files</button>
-  <button id="btnOpen" title="Open local file">&#128194; Open</button>
-  <input type="file" id="fileInput" class="file-input" accept=".puml,.plantuml,.pu,.txt,.wsd">
-  <button id="btnSave" title="Save to disk">&#128190; Save</button>
+  <div class="dropdown" id="menuFile">
+    <button class="dropdown-toggle">File &#9662;</button>
+    <div class="dropdown-content">
+      <button id="btnNew">&#128196; New</button>
+      <button id="btnOpen">&#128194; Open File...</button>
+      <input type="file" id="fileInput" class="file-input" accept=".puml,.plantuml,.pu,.txt,.wsd">
+      <button id="btnSave">&#128190; Save</button>
+      <hr>
+      <button id="btnFiles">&#128193; Browse Files</button>
+    </div>
+  </div>
+  <div class="dropdown" id="menuExport">
+    <button class="dropdown-toggle">Export &#9662;</button>
+    <div class="dropdown-content">
+      <button id="btnSvg">SVG</button>
+      <button id="btnPng">PNG</button>
+      <hr>
+      <button id="btnSplitPng">Split PNGs (ZIP)</button>
+      <button id="btnSectionPng">Section PNGs (ZIP)</button>
+    </div>
+  </div>
+  <div class="dropdown" id="menuConvert">
+    <button class="dropdown-toggle">Convert &#9662;</button>
+    <div class="dropdown-content">
+      <button disabled>To PlantUML</button>
+      <button id="btnConvertMermaid">To Mermaid</button>
+      <button id="btnConvertGliffy">To Gliffy JSON</button>
+      <hr>
+      <button id="btnImportMermaid">Import from Mermaid...</button>
+    </div>
+  </div>
+  <div class="dropdown" id="menuView">
+    <button class="dropdown-toggle">View &#9662;</button>
+    <div class="dropdown-content">
+      <label><input type="checkbox" id="chkAuto" checked> Auto-render</label>
+      <hr>
+      <button id="btnZoomIn">Zoom In</button>
+      <button id="btnZoomOut">Zoom Out</button>
+      <button id="btnFit">Fit to View</button>
+    </div>
+  </div>
   <div class="sep"></div>
   <button id="btnRefresh" title="Render now (Ctrl+Enter)">&#9654; Render</button>
-  <label title="Auto-render on change">
-    <input type="checkbox" id="chkAuto" checked> Auto
-  </label>
-  <div class="sep"></div>
-  <button id="btnSvg" title="Export SVG">SVG</button>
-  <button id="btnPng" title="Export PNG">PNG</button>
-  <div class="sep"></div>
   <button id="btnShare" title="Share diagram via link">&#128279; Share</button>
-  <div class="sep"></div>
-  <button id="btnZoomIn" title="Zoom in">&#43;</button>
-  <button id="btnZoomOut" title="Zoom out">&#8722;</button>
-  <button id="btnFit" title="Fit to view">Fit</button>
-  <div class="sep"></div>
-  <button id="btnSettings" title="Settings">&#9881; Settings</button>
+  <button id="btnSettings" title="Settings">&#9881;</button>
   <button id="btnTheme" title="Toggle dark/light">&#127763;</button>
   <span class="status" id="status">Ready</span>
 </div>
@@ -261,17 +274,24 @@
   <!-- Preview -->
   <div class="preview-pane" id="previewPane">
     <div class="pane-header">
-      <span>preview</span>
+      <span>preview <span id="diagramInfo" class="diagram-info"></span></span>
       <div class="controls">
+        <span class="section-hdr-btns" id="sectionHdrBtns">
+          <button class="sec-hdr-btn" id="btnSecColAll" title="Collapse all sections">&#9662; Collapse All</button>
+          <button class="sec-hdr-btn" id="btnSecExpAll" title="Expand all sections">&#9652; Expand All</button>
+        </span>
+        <span class="ctrl-sep"></span>
         <button id="btnCollapsePreview" class="collapse-btn" title="Collapse preview (maximize editor)">&#9658;</button>
-        <span id="diagramInfo" style="font-weight:400; text-transform:none;"></span>
       </div>
     </div>
-    <div class="preview-wrap" id="previewWrap">
-      <div style="color:var(--text); opacity:.4; margin-top:80px; text-align:center;">
-        <p style="font-size:32px;">&#9670;</p>
-        <p style="margin-top:8px;">Paste or open a PlantUML diagram to begin</p>
-        <p style="margin-top:4px; font-size:12px;">Ctrl+Enter to render</p>
+    <div class="preview-body">
+      <div class="section-gutter" id="sectionGutter"></div>
+      <div class="preview-wrap" id="previewWrap">
+        <div style="color:var(--text); opacity:.4; margin-top:80px; text-align:center;">
+          <p style="font-size:32px;">&#9670;</p>
+          <p style="margin-top:8px;">Paste or open a PlantUML diagram to begin</p>
+          <p style="margin-top:4px; font-size:12px;">Ctrl+Enter to render</p>
+        </div>
       </div>
     </div>
   </div>
@@ -298,6 +318,10 @@
     <label for="cfgShareLimit">URL encoding size limit (chars)</label>
     <input type="number" id="cfgShareLimit" placeholder="2000" min="500" max="50000">
     <div class="hint">In Auto mode, diagrams larger than this use server storage instead of URL encoding.</div>
+    <div class="section-title">Split Export</div>
+    <label for="cfgSplitMaxLines">Max lines per split group</label>
+    <input type="number" id="cfgSplitMaxLines" placeholder="80" min="20" max="500">
+    <div class="hint">Controls how many PUML lines per image when using "Split PNGs". Lower = shorter images, more parts. Try 60-100 for Word documents.</div>
     <div class="modal-actions">
       <button id="btnSettingsCancel">Cancel</button>
       <button id="btnSettingsReset">Reset Defaults</button>
@@ -316,11 +340,30 @@
   <div class="share-meta" id="shareMeta"></div>
 </div>
 
+<!-- Import Mermaid modal -->
+<div class="modal-overlay" id="importMermaidModal">
+  <div class="modal">
+    <h3>&#8612; Import from Mermaid</h3>
+    <label for="mermaidImportText">Paste Mermaid sequence diagram code</label>
+    <textarea id="mermaidImportText" placeholder="sequenceDiagram
+    participant Alice
+    participant Bob
+    Alice->>Bob: Hello
+    Bob-->>Alice: Hi"></textarea>
+    <div class="hint">Mermaid sequence diagram code will be converted to PlantUML and loaded into the editor.</div>
+    <div class="modal-actions">
+      <button id="btnImportMermaidCancel">Cancel</button>
+      <button id="btnImportMermaidLoad" class="primary">Convert &amp; Load</button>
+    </div>
+  </div>
+</div>
+
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
 <!-- Scripts -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
@@ -328,6 +371,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/search.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/searchcursor.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/dialog/dialog.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/fold/foldcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/fold/foldgutter.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/fold/foldgutter.min.css">
+<script src="/converters.js"></script>
 <script>
 (function() {
   const DEFAULT_KROKI_HOST = window.location.hostname || 'ilcepoc3503';
@@ -335,6 +382,7 @@
   const DEFAULT_DEBOUNCE = 800;
   const DEFAULT_SHARE_MODE = 'auto';
   const DEFAULT_SHARE_LIMIT = 2000;
+  const DEFAULT_SPLIT_MAX_LINES = 80;
 
   function getKrokiUrl() {
     return localStorage.getItem('puml-kroki-url') || DEFAULT_KROKI_URL;
@@ -347,6 +395,9 @@
   }
   function getShareLimit() {
     return parseInt(localStorage.getItem('puml-share-limit'), 10) || DEFAULT_SHARE_LIMIT;
+  }
+  function getSplitMaxLines() {
+    return parseInt(localStorage.getItem('puml-split-max-lines'), 10) || DEFAULT_SPLIT_MAX_LINES;
   }
 
   // --- Base64url helpers ---
@@ -387,6 +438,23 @@
   const fileNameEl = $('fileName');
   const diagramInfo = $('diagramInfo');
 
+  // --- Dropdown menu behavior ---
+  document.querySelectorAll('.dropdown').forEach(dd => {
+    const toggle = dd.querySelector('.dropdown-toggle');
+    toggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const wasOpen = dd.classList.contains('open');
+      document.querySelectorAll('.dropdown.open').forEach(d => d.classList.remove('open'));
+      if (!wasOpen) dd.classList.add('open');
+    });
+    dd.querySelectorAll('.dropdown-content button').forEach(btn => {
+      btn.addEventListener('click', () => dd.classList.remove('open'));
+    });
+  });
+  document.addEventListener('click', () => {
+    document.querySelectorAll('.dropdown.open').forEach(d => d.classList.remove('open'));
+  });
+
   // Toast helper
   function showToast(msg, duration) {
     const t = $('toast');
@@ -397,6 +465,49 @@
   }
 
   // CodeMirror setup
+  const pumlFoldFinder = function(cm, start) {
+    const line = cm.getLine(start.line);
+    const trimmed = line.trim();
+    if (/^==\s*.+\s*==\s*$/.test(trimmed)) {
+      for (let i = start.line + 1; i < cm.lineCount(); i++) {
+        const l = cm.getLine(i).trim();
+        if (/^==\s*.+\s*==\s*$/.test(l) || /^@enduml\b/i.test(l)) {
+          const end = i - 1;
+          if (end > start.line) {
+            return { from: CodeMirror.Pos(start.line, line.length),
+                     to: CodeMirror.Pos(end, cm.getLine(end).length) };
+          }
+          return null;
+        }
+      }
+      const last = cm.lineCount() - 1;
+      if (last > start.line) {
+        return { from: CodeMirror.Pos(start.line, line.length),
+                 to: CodeMirror.Pos(last, cm.getLine(last).length) };
+      }
+      return null;
+    }
+    if (!/^(alt|else|opt|loop|group|par|critical|break)\b/i.test(trimmed)) return null;
+    const isElse = /^else\b/i.test(trimmed);
+    let depth = isElse ? 0 : 1;
+    for (let i = start.line + 1; i < cm.lineCount(); i++) {
+      const l = cm.getLine(i).trim();
+      if (/^(alt|opt|loop|group|par|critical|break)\b/i.test(l)) depth++;
+      if (/^else\b/i.test(l) && depth === (isElse ? 0 : 1)) {
+        return { from: CodeMirror.Pos(start.line, line.length),
+                 to: CodeMirror.Pos(i - 1, cm.getLine(i - 1).length) };
+      }
+      if (/^end\b/i.test(l)) {
+        depth--;
+        if (depth === 0) {
+          return { from: CodeMirror.Pos(start.line, line.length),
+                   to: CodeMirror.Pos(i, cm.getLine(i).length) };
+        }
+      }
+    }
+    return null;
+  };
+
   CodeMirror.defineSimpleMode && null;
   const cm = CodeMirror.fromTextArea($('editor'), {
     lineNumbers: true,
@@ -406,6 +517,9 @@
     indentWithTabs: true,
     lineWrapping: false,
     theme: 'default',
+    foldGutter: { rangeFinder: pumlFoldFinder },
+    gutters: ['CodeMirror-linenumbers', 'CodeMirror-foldgutter'],
+    extraKeys: { 'Ctrl-Q': function(cm) { cm.foldCode(cm.getCursor(), pumlFoldFinder); } },
   });
 
   const BLANK_DIAGRAM = `@startuml\n\n@enduml`;
@@ -444,6 +558,15 @@
       }
     }
 
+    const payload = DiagramConverters.checkConvertPayload();
+    if (payload && payload.target === 'plantuml') {
+      cm.setValue(payload.content);
+      fileNameEl.textContent = 'converted';
+      setStatus('Loaded from conversion', 'ok');
+      setTimeout(render, 100);
+      return;
+    }
+
     const cached = localStorage.getItem('puml-editor-content');
     cm.setValue(cached !== null ? cached : BLANK_DIAGRAM);
   }
@@ -461,16 +584,147 @@
     statusEl.className = 'status' + (type ? ' ' + type : '');
   }
 
+  // --- Section collapse (viewer) ---
+  const PUML_SECTION_RE = /^==\s*(.+?)\s*==\s*$/;
+  const collapsedSections = new Set();
+
+  function parseSections(source) {
+    const lines = source.split(/\r?\n/);
+    const sections = [];
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].trim().match(PUML_SECTION_RE);
+      if (m) {
+        if (sections.length) sections[sections.length - 1].endLine = i - 1;
+        const fullText = m[1];
+        const sm = fullText.match(/^Section\s+([\w]+)[:\s]*(.*)/i);
+        sections.push({
+          id: sm ? sm[1] : String(sections.length + 1),
+          title: sm ? (sm[2].trim() || fullText) : fullText,
+          fullText: fullText,
+          startLine: i,
+          endLine: lines.length - 1,
+        });
+      }
+    }
+    return sections;
+  }
+
+  function buildSectionCollapsedSource(source, collapsed) {
+    if (!collapsed.size) return source;
+    const lines = source.split(/\r?\n/);
+    const sections = parseSections(source);
+    if (!sections.length) return source;
+    const out = [];
+    let skipUntil = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (i <= skipUntil) continue;
+      const sec = sections.find(s => i === s.startLine);
+      if (sec && collapsed.has(sec.id)) {
+        out.push(lines[i]);
+        skipUntil = sec.endLine;
+        continue;
+      }
+      out.push(lines[i]);
+    }
+    return out.join('\n');
+  }
+
+  function findSectionInSvg(svgEl, sec, usedEls) {
+    const textEls = Array.from(svgEl.querySelectorAll('text'));
+    const candidates = [sec.fullText, sec.title];
+    for (const needle of candidates) {
+      const norm = needle.toLowerCase();
+      const found = textEls.find(el => {
+        if (usedEls.has(el)) return false;
+        const t = (el.textContent || '').trim().toLowerCase();
+        return t === norm || t.includes(norm);
+      });
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function updateSectionControls(source) {
+    const gutter = $('sectionGutter');
+    const hdr = $('sectionHdrBtns');
+    const sections = parseSections(source);
+    if (!sections.length) {
+      gutter.classList.remove('visible');
+      hdr.style.display = 'none';
+      gutter.innerHTML = '';
+      return;
+    }
+    hdr.style.display = 'inline-flex';
+    const svgEl = previewWrap.querySelector('svg');
+    if (!svgEl) { gutter.classList.remove('visible'); gutter.innerHTML = ''; return; }
+
+    gutter.classList.add('visible');
+    gutter.innerHTML = '';
+    const svgRect = svgEl.getBoundingClientRect();
+    const wrapRect = previewWrap.getBoundingClientRect();
+    const offsetTop = svgRect.top - wrapRect.top + previewWrap.scrollTop;
+
+    const inner = document.createElement('div');
+    inner.className = 'sg-inner';
+    inner.style.height = svgRect.height + offsetTop + 16 + 'px';
+
+    const displaySrc = buildSectionCollapsedSource(source, collapsedSections);
+    const displaySections = parseSections(displaySrc);
+    const displayLines = displaySrc.split(/\r?\n/).length;
+    const usedEls = new Set();
+
+    for (let i = 0; i < sections.length; i++) {
+      const sec = sections[i];
+      const dSec = displaySections.find(d => d.id === sec.id);
+      const textEl = findSectionInSvg(svgEl, sec, usedEls);
+      if (textEl) usedEls.add(textEl);
+
+      const isColl = collapsedSections.has(sec.id);
+      const btn = document.createElement('button');
+      btn.className = 'sg-toggle' + (isColl ? ' collapsed' : '');
+      btn.textContent = isColl ? '\u25b6' : '\u25bc';
+      btn.title = sec.title || sec.fullText;
+      btn.onclick = () => {
+        if (collapsedSections.has(sec.id)) collapsedSections.delete(sec.id);
+        else collapsedSections.add(sec.id);
+        render();
+      };
+      let y;
+      if (textEl) {
+        const elRect = textEl.getBoundingClientRect();
+        y = elRect.top - svgRect.top + offsetTop;
+      } else if (dSec) {
+        y = (dSec.startLine / displayLines) * svgRect.height + offsetTop;
+      } else {
+        y = (i / sections.length) * svgRect.height + offsetTop;
+      }
+      btn.style.top = Math.max(0, y) + 'px';
+      inner.appendChild(btn);
+    }
+    gutter.appendChild(inner);
+    previewWrap.onscroll = () => { gutter.scrollTop = previewWrap.scrollTop; };
+    gutter.scrollTop = previewWrap.scrollTop;
+  }
+
+  $('btnSecColAll').onclick = () => {
+    const secs = parseSections(cm.getValue().trim());
+    for (const s of secs) collapsedSections.add(s.id);
+    render();
+  };
+  $('btnSecExpAll').onclick = () => { collapsedSections.clear(); render(); };
+
   async function render() {
     const src = cm.getValue().trim();
     if (!src) { previewWrap.innerHTML = ''; setStatus('Empty', ''); return; }
+
+    const displaySrc = buildSectionCollapsedSource(src, collapsedSections);
 
     setStatus('Rendering...', 'loading');
     try {
       const resp = await fetch(getKrokiUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
-        body: src,
+        body: displaySrc,
       });
       if (!resp.ok) {
         const errText = await resp.text();
@@ -478,6 +732,7 @@
       }
       lastSvg = await resp.text();
       displaySvg(lastSvg);
+      updateSectionControls(src);
 
       const lines = src.split('\n').length;
       const bytes = new Blob([src]).size;
@@ -657,6 +912,294 @@
     } catch (e) {
       setStatus('PNG export failed', 'err');
     }
+  };
+
+  // --- Split & Export PNGs ---
+  const SECTION_RE = /^==\s*Section\s+/i;
+  const PARTICIPANT_RE = /^(participant|actor|database)\s+(?:"[^"]*"\s+as\s+)?(\S+)/i;
+
+  function splitPumlBySections(source, maxLinesPerGroup) {
+    maxLinesPerGroup = maxLinesPerGroup || 80;
+    const lines = source.split(/\r?\n/);
+
+    let headerEnd = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (SECTION_RE.test(lines[i].trim())) { headerEnd = i; break; }
+    }
+    if (headerEnd === -1) return null;
+
+    let h = headerEnd;
+    while (h > 0 && /^\s*(\|\|\|)?\s*$/.test(lines[h - 1])) h--;
+    const header = lines.slice(0, h);
+
+    const preamble = [];
+    const participants = [];
+    for (const line of header) {
+      const m = line.trim().match(PARTICIPANT_RE);
+      if (m) {
+        participants.push({ alias: m[2], line });
+      } else {
+        preamble.push(line);
+      }
+    }
+
+    const sections = [];
+    let current = null;
+    for (let i = headerEnd; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      if (SECTION_RE.test(trimmed)) {
+        if (current) sections.push(current);
+        const m = trimmed.match(/^==\s*Section\s+([\w]+)[:\s]*(.*?)\s*==$/i);
+        current = {
+          id: m ? m[1] : String(sections.length + 1),
+          title: m ? m[2].trim() : '',
+          lines: [lines[i]],
+        };
+      } else if (trimmed === '@enduml') {
+        // skip
+      } else if (current) {
+        current.lines.push(lines[i]);
+      }
+    }
+    if (current) sections.push(current);
+
+    for (const s of sections) {
+      while (s.lines.length && /^\s*(\|\|\|)?\s*$/.test(s.lines[s.lines.length - 1])) s.lines.pop();
+    }
+
+    const groups = [];
+    let currentGrp = [];
+    let currentLines = 0;
+    for (const sec of sections) {
+      const secLines = sec.lines.length;
+      if (currentGrp.length > 0 && currentLines + secLines > maxLinesPerGroup) {
+        groups.push(currentGrp);
+        currentGrp = [sec];
+        currentLines = secLines;
+      } else {
+        currentGrp.push(sec);
+        currentLines += secLines;
+      }
+    }
+    if (currentGrp.length > 0) groups.push(currentGrp);
+
+    return groups.map((group, idx) => {
+      const ids = group.map(s => s.id);
+      const titles = group.map(s => s.title).filter(Boolean).join(', ');
+      const label = ids.length === 1 ? `Section ${ids[0]}` : `Sections ${ids.join('-')}`;
+
+      const content = group.map(s => s.lines.join('\n')).join('\n');
+      const used = participants.filter(p => {
+        const re = new RegExp('\\b' + p.alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+        return re.test(content);
+      });
+
+      const firstAlias = used.length > 0 ? used[0].alias : participants[0]?.alias || 'A';
+      const lastAlias = used.length > 1 ? used[used.length - 1].alias : firstAlias;
+
+      const out = [...preamble];
+      for (const p of used) out.push(p.line);
+      out.push('',
+        `note over ${firstAlias}, ${lastAlias}`,
+        `    **Part ${idx + 1} of ${groups.length}** — ${label}: ${titles}`,
+        `end note`, '');
+      for (let i = 0; i < group.length; i++) {
+        out.push(...group[i].lines);
+        if (i < group.length - 1) out.push('');
+      }
+      out.push('', '@enduml');
+      return { partNum: idx + 1, ids, label, titles, puml: out.join('\n') };
+    });
+  }
+
+  function splitPumlPerSection(source) {
+    const lines = source.split(/\r?\n/);
+
+    let headerEnd = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (SECTION_RE.test(lines[i].trim())) { headerEnd = i; break; }
+    }
+    if (headerEnd === -1) return null;
+
+    let h = headerEnd;
+    while (h > 0 && /^\s*(\|\|\|)?\s*$/.test(lines[h - 1])) h--;
+    const header = lines.slice(0, h);
+
+    const preamble = [];
+    const participants = [];
+    for (const line of header) {
+      const m = line.trim().match(PARTICIPANT_RE);
+      if (m) {
+        participants.push({ alias: m[2], line });
+      } else {
+        preamble.push(line);
+      }
+    }
+
+    const sections = [];
+    let current = null;
+    for (let i = headerEnd; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      if (SECTION_RE.test(trimmed)) {
+        if (current) sections.push(current);
+        const m = trimmed.match(/^==\s*Section\s+([\w]+)[:\s]*(.*?)\s*==$/i);
+        current = {
+          id: m ? m[1] : String(sections.length + 1),
+          title: m ? m[2].trim() : '',
+          lines: [lines[i]],
+        };
+      } else if (trimmed === '@enduml') {
+        // skip
+      } else if (current) {
+        current.lines.push(lines[i]);
+      }
+    }
+    if (current) sections.push(current);
+
+    for (const s of sections) {
+      while (s.lines.length && /^\s*(\|\|\|)?\s*$/.test(s.lines[s.lines.length - 1])) s.lines.pop();
+    }
+
+    return sections.map((sec, idx) => {
+      const content = sec.lines.join('\n');
+      const used = participants.filter(p => {
+        const re = new RegExp('\\b' + p.alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+        return re.test(content);
+      });
+
+      const firstAlias = used.length > 0 ? used[0].alias : participants[0]?.alias || 'A';
+      const lastAlias = used.length > 1 ? used[used.length - 1].alias : firstAlias;
+      const label = `Section ${sec.id}`;
+
+      const out = [...preamble];
+      for (const p of used) out.push(p.line);
+      out.push('',
+        `note over ${firstAlias}, ${lastAlias}`,
+        `    **Section ${idx + 1} of ${sections.length}** — ${label}: ${sec.title}`,
+        `end note`, '');
+      out.push(...sec.lines);
+      out.push('', '@enduml');
+      return { partNum: idx + 1, id: sec.id, label, title: sec.title, puml: out.join('\n') };
+    });
+  }
+
+  $('btnSplitPng').onclick = async () => {
+    const src = cm.getValue().trim();
+    if (!src) { setStatus('Nothing to export', 'err'); return; }
+
+    const parts = splitPumlBySections(src, getSplitMaxLines());
+    if (!parts || parts.length === 0) {
+      setStatus('No "== Section ..." markers found — cannot split', 'err');
+      return;
+    }
+
+    if (typeof JSZip === 'undefined') {
+      setStatus('JSZip not loaded', 'err');
+      return;
+    }
+
+    const pngUrl = getKrokiUrl().replace('/svg', '/png');
+    const baseName = (currentFileName || 'diagram').replace(/\.puml$/i, '');
+    const zip = new JSZip();
+    let failed = 0;
+
+    setStatus(`Rendering 0/${parts.length} sections...`, 'loading');
+
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i];
+      setStatus(`Rendering ${i + 1}/${parts.length}: ${p.label}...`, 'loading');
+      try {
+        const resp = await fetch(pngUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: p.puml,
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const blob = await resp.blob();
+        const fileName = `${baseName}_part${p.partNum}_sec${p.ids.join('-')}.png`;
+        zip.file(fileName, blob);
+      } catch (e) {
+        failed++;
+        console.error(`Failed to render part ${p.partNum}:`, e);
+      }
+      zip.file(`${baseName}_part${p.partNum}_sec${p.ids.join('-')}.puml`, p.puml);
+    }
+
+    if (failed === parts.length) {
+      setStatus('All section renders failed — check Kroki', 'err');
+      return;
+    }
+
+    setStatus('Creating ZIP...', 'loading');
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(zipBlob);
+    a.download = `${baseName}_sections.zip`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+
+    const msg = failed ? `Exported ${parts.length - failed}/${parts.length} sections (${failed} failed)` : `Exported ${parts.length} section PNGs`;
+    setStatus(msg, failed ? 'err' : 'ok');
+    showToast(msg);
+  };
+
+  $('btnSectionPng').onclick = async () => {
+    const src = cm.getValue().trim();
+    if (!src) { setStatus('Nothing to export', 'err'); return; }
+
+    const parts = splitPumlPerSection(src);
+    if (!parts || parts.length === 0) {
+      setStatus('No "== Section ..." markers found — cannot split', 'err');
+      return;
+    }
+
+    if (typeof JSZip === 'undefined') {
+      setStatus('JSZip not loaded', 'err');
+      return;
+    }
+
+    const pngUrl = getKrokiUrl().replace('/svg', '/png');
+    const baseName = (currentFileName || 'diagram').replace(/\.puml$/i, '');
+    const zip = new JSZip();
+    let failed = 0;
+
+    setStatus(`Rendering 0/${parts.length} sections...`, 'loading');
+
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i];
+      setStatus(`Rendering ${i + 1}/${parts.length}: ${p.label}...`, 'loading');
+      try {
+        const resp = await fetch(pngUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: p.puml,
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const blob = await resp.blob();
+        zip.file(`${baseName}_sec${p.id}.png`, blob);
+      } catch (e) {
+        failed++;
+        console.error(`Failed to render section ${p.id}:`, e);
+      }
+      zip.file(`${baseName}_sec${p.id}.puml`, p.puml);
+    }
+
+    if (failed === parts.length) {
+      setStatus('All section renders failed — check Kroki', 'err');
+      return;
+    }
+
+    setStatus('Creating ZIP...', 'loading');
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(zipBlob);
+    a.download = `${baseName}_per_section.zip`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+
+    const msg = failed ? `Exported ${parts.length - failed}/${parts.length} sections (${failed} failed)` : `Exported all ${parts.length} sections individually`;
+    setStatus(msg, failed ? 'err' : 'ok');
+    showToast(msg);
   };
 
   // --- Share ---
@@ -852,6 +1395,12 @@
     }
   }
 
+  function resetPaneInlineStyles() {
+    editorPane.style.flex = '';
+    editorPane.style.width = '';
+    previewPane.style.flex = '';
+  }
+
   btnCollapseEditor.onclick = () => {
     if (previewPane.classList.contains('collapsed')) {
       previewPane.classList.remove('collapsed');
@@ -859,6 +1408,7 @@
       editorPane.classList.add('collapsed');
       previewPane.classList.remove('collapsed');
     }
+    resetPaneInlineStyles();
     updateCollapseButtons();
     setTimeout(() => cm.refresh(), 250);
   };
@@ -870,8 +1420,47 @@
       previewPane.classList.add('collapsed');
       editorPane.classList.remove('collapsed');
     }
+    resetPaneInlineStyles();
     updateCollapseButtons();
     setTimeout(() => cm.refresh(), 250);
+  };
+
+  // --- Convert menu ---
+  $('btnConvertMermaid').onclick = () => {
+    const src = cm.getValue().trim();
+    if (!src) { showToast('Editor is empty'); return; }
+    const converted = DiagramConverters.plantumlToMermaid(src);
+    DiagramConverters.convertAndNavigate(converted, 'mermaid');
+  };
+
+  $('btnConvertGliffy').onclick = () => {
+    const src = cm.getValue().trim();
+    if (!src) { showToast('Editor is empty'); return; }
+    const converted = DiagramConverters.plantumlToGliffyJson(src);
+    DiagramConverters.convertAndNavigate(converted, 'gliffy');
+  };
+
+  // --- Import Mermaid modal ---
+  const importMermaidModal = $('importMermaidModal');
+
+  $('btnImportMermaid').onclick = () => {
+    $('mermaidImportText').value = '';
+    importMermaidModal.classList.add('open');
+    setTimeout(() => $('mermaidImportText').focus(), 100);
+  };
+
+  $('btnImportMermaidCancel').onclick = () => importMermaidModal.classList.remove('open');
+  importMermaidModal.onclick = (e) => { if (e.target === importMermaidModal) importMermaidModal.classList.remove('open'); };
+
+  $('btnImportMermaidLoad').onclick = () => {
+    const mermaidCode = $('mermaidImportText').value.trim();
+    if (!mermaidCode) { showToast('Paste Mermaid code first'); return; }
+    if (cm.getValue().trim() && !confirm('Replace current editor content with converted Mermaid diagram?')) return;
+    const puml = DiagramConverters.mermaidToPlantUml(mermaidCode);
+    cm.setValue(puml);
+    importMermaidModal.classList.remove('open');
+    showToast('Mermaid converted to PlantUML');
+    render();
   };
 
   // --- Settings modal ---
@@ -880,12 +1469,14 @@
   const cfgDebounce = $('cfgDebounce');
   const cfgShareMode = $('cfgShareMode');
   const cfgShareLimit = $('cfgShareLimit');
+  const cfgSplitMaxLines = $('cfgSplitMaxLines');
 
   $('btnSettings').onclick = () => {
     cfgKrokiUrl.value = getKrokiUrl();
     cfgDebounce.value = getDebounceMs();
     cfgShareMode.value = getShareMode();
     cfgShareLimit.value = getShareLimit();
+    cfgSplitMaxLines.value = getSplitMaxLines();
     settingsModal.classList.add('open');
   };
 
@@ -900,6 +1491,7 @@
     cfgDebounce.value = DEFAULT_DEBOUNCE;
     cfgShareMode.value = DEFAULT_SHARE_MODE;
     cfgShareLimit.value = DEFAULT_SHARE_LIMIT;
+    cfgSplitMaxLines.value = DEFAULT_SPLIT_MAX_LINES;
   };
 
   $('btnSettingsSave').onclick = () => {
@@ -913,6 +1505,9 @@
     const limit = parseInt(cfgShareLimit.value, 10);
     if (limit > 0) localStorage.setItem('puml-share-limit', limit);
     else localStorage.removeItem('puml-share-limit');
+    const splitMax = parseInt(cfgSplitMaxLines.value, 10);
+    if (splitMax > 0) localStorage.setItem('puml-split-max-lines', splitMax);
+    else localStorage.removeItem('puml-split-max-lines');
     settingsModal.classList.remove('open');
     setStatus('Settings saved', 'ok');
   };
@@ -921,6 +1516,7 @@
     if (e.key === 'Escape') {
       if (settingsModal.classList.contains('open')) settingsModal.classList.remove('open');
       if (sharePopover.classList.contains('open')) sharePopover.classList.remove('open');
+      if (importMermaidModal.classList.contains('open')) importMermaidModal.classList.remove('open');
     }
   });
 

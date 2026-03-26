@@ -133,8 +133,9 @@
   .preview-pane.collapsed { flex: 0 0 0 !important; width: 0 !important; min-width: 0 !important; overflow: hidden; }
   .editor-pane.collapsed + .resizer { display: none; }
   .resizer:has(+ .preview-pane.collapsed) { display: none; }
-  .pane-header button.collapse-btn { font-size: 14px; line-height: 1; padding: 2px 6px; }
-  .pane-header button.collapse-btn.restore { font-size: 11px; padding: 2px 8px; background: var(--accent); color: #fff; border-color: var(--accent); }
+  .pane-header button.collapse-btn { font-size: 14px; line-height: 1; padding: 2px 6px; opacity: .6; }
+  .pane-header button.collapse-btn:hover { opacity: 1; background: var(--hover); }
+  .pane-header button.collapse-btn.restore { font-size: 11px; padding: 2px 8px; background: var(--accent); color: #fff; border-color: var(--accent); opacity: 1; }
 
   /* Settings modal */
   .modal-overlay {
@@ -168,7 +169,7 @@
 
 <!-- Toolbar -->
 <div class="toolbar">
-  <span class="brand" style="display:inline-flex;flex-direction:column;align-items:flex-end;">&#9670; PlantUML Editor<span style="font-size:9px;font-weight:400;opacity:.7;">by Wonkday</span></span>
+  <span class="brand" style="display:inline-flex;flex-direction:column;align-items:flex-end;">&#9670; PlantUML Editor<span style="font-size:9px;font-weight:400;opacity:.7;">by Rohit</span></span>
   <div class="sep"></div>
   <button id="btnNew" title="New diagram (reset editor)">&#128196; New</button>
   <button id="btnFiles" title="Browse .puml files">&#128193; Files</button>
@@ -641,7 +642,12 @@ FE --> User : Display
     }
   }
 
-  // Editor's button: toggle between "preview maximized" and split
+  function resetPaneInlineStyles() {
+    editorPane.style.flex = '';
+    editorPane.style.width = '';
+    previewPane.style.flex = '';
+  }
+
   btnCollapseEditor.onclick = () => {
     if (previewPane.classList.contains('collapsed')) {
       previewPane.classList.remove('collapsed');
@@ -649,11 +655,11 @@ FE --> User : Display
       editorPane.classList.add('collapsed');
       previewPane.classList.remove('collapsed');
     }
+    resetPaneInlineStyles();
     updateCollapseButtons();
     setTimeout(() => cm.refresh(), 250);
   };
 
-  // Preview's button: if editor is collapsed → restore split; otherwise collapse preview
   btnCollapsePreview.onclick = () => {
     if (editorPane.classList.contains('collapsed')) {
       editorPane.classList.remove('collapsed');
@@ -661,6 +667,7 @@ FE --> User : Display
       previewPane.classList.add('collapsed');
       editorPane.classList.remove('collapsed');
     }
+    resetPaneInlineStyles();
     updateCollapseButtons();
     setTimeout(() => cm.refresh(), 250);
   };

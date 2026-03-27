@@ -13,12 +13,15 @@
 //   --group <spec>       Section grouping spec, e.g. "1-3,4-5,6-8,9-10,11-12"
 //   --max-lines <n>      Max content lines per group for auto-grouping (default: 60)
 //                        Lower = shorter images, more parts. Ignored when --group is used.
+//   --no-label           Omit the "Part X of Y — Section ..." note from split diagrams
+//   --per-section        Split per section, also sub-splitting at ' @split markers
 //
 // Examples:
 //   node scripts/split-puml.js diagram.puml --png
 //   node scripts/split-puml.js diagram.puml --max-lines 80 --png
 //   node scripts/split-puml.js diagram.puml --group "1-3,4-5,6-8,9-10,11-12" --png
 //   node scripts/split-puml.js diagram.puml --output-dir ./out --kroki-url http://myhost:8000 --png
+//   node scripts/split-puml.js diagram.puml --png --no-label
 
 const fs = require('fs');
 const path = require('path');
@@ -30,16 +33,18 @@ const https = require('https');
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const args = { png: false, maxLines: 60 };
+  const args = { png: false, maxLines: 60, label: true, perSection: false };
   const positional = [];
   for (let i = 2; i < argv.length; i++) {
     switch (argv[i]) {
-      case '--output-dir': args.outputDir = argv[++i]; break;
-      case '--kroki-url':  args.krokiUrl  = argv[++i]; break;
-      case '--group':      args.group     = argv[++i]; break;
-      case '--max-lines':  args.maxLines  = parseInt(argv[++i], 10) || 60; break;
-      case '--png':        args.png       = true;      break;
-      default:             positional.push(argv[i]);
+      case '--output-dir':   args.outputDir  = argv[++i]; break;
+      case '--kroki-url':    args.krokiUrl   = argv[++i]; break;
+      case '--group':        args.group      = argv[++i]; break;
+      case '--max-lines':    args.maxLines   = parseInt(argv[++i], 10) || 60; break;
+      case '--png':          args.png        = true;      break;
+      case '--no-label':     args.label      = false;     break;
+      case '--per-section':  args.perSection = true;      break;
+      default:               positional.push(argv[i]);
     }
   }
   args.inputFile = positional[0];
@@ -181,13 +186,109 @@ function findUsedParticipants(participants, sectionGroup) {
 }
 
 // ---------------------------------------------------------------------------
+// Sub-splitting at @split markers
+// ---------------------------------------------------------------------------
+
+const SPLIT_MARKER_RE = /^'\s*@split/i;
+
+const BLOCK_START_RE = /^(group|opt|alt|loop|par|break|critical|ref)\b/i;
+const BLOCK_END_RE = /^end\b/i;
+const SECTION_MARKER_RE = /^==\s+/;
+
+function balanceChunk(lines) {
+  let depth = 0;
+  const prefix = [];
+  const suffix = [];
+  const firstContent = lines.find(l => l.trim());
+  const startsWithElse = firstContent && /^else\b/i.test(firstContent.trim());
+  for (const l of lines) {
+    const t = l.trim();
+    if (BLOCK_END_RE.test(t)) depth--;
+    if (BLOCK_START_RE.test(t)) depth++;
+  }
+  if (startsWithElse) {
+    prefix.push('alt continued');
+    depth++;
+  }
+  while (depth > 0) { suffix.push('end'); depth--; }
+  while (depth < 0) { prefix.push('group continued'); depth++; }
+  return [...prefix, ...lines, ...suffix];
+}
+
+function subSplitAtMarkers(section) {
+  const chunks = [[]];
+  for (const line of section.lines) {
+    if (SPLIT_MARKER_RE.test(line.trim())) {
+      chunks.push([]);
+    } else {
+      chunks[chunks.length - 1].push(line);
+    }
+  }
+  const hasContent = l => {
+    const t = l.trim();
+    return t && t !== '|||' && !SECTION_MARKER_RE.test(t) && !BLOCK_END_RE.test(t);
+  };
+  return chunks.filter(c => c.some(hasContent));
+}
+
+function buildPerSectionParts(header, sections, opts = {}) {
+  const { preamble, participants } = parseHeader(header);
+  const parts = [];
+  let partNum = 0;
+
+  for (const sec of sections) {
+    const subParts = subSplitAtMarkers(sec);
+    const effectiveParts = subParts.length > 0 ? subParts : [sec.lines.filter(l => !SPLIT_MARKER_RE.test(l.trim()))];
+
+    for (let cIdx = 0; cIdx < effectiveParts.length; cIdx++) {
+      partNum++;
+      const rawChunk = effectiveParts[cIdx];
+      const chunk = balanceChunk(rawChunk);
+      const content = chunk.join('\n');
+      const used = participants.filter(p => {
+        const re = new RegExp('\\b' + p.alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+        return re.test(content);
+      });
+      const effectiveUsed = used.length > 0 ? used : participants;
+
+      const out = [];
+      out.push(...preamble);
+      for (const p of effectiveUsed) out.push(p.line);
+      out.push('');
+
+      if (opts.label !== false) {
+        const subLabel = effectiveParts.length > 1 ? String.fromCharCode(97 + cIdx) : '';
+        const labelText = `Section ${sec.id}${subLabel}`;
+        const firstAlias = effectiveUsed.length > 0 ? effectiveUsed[0].alias : 'CSR';
+        const lastAlias = effectiveUsed.length > 1 ? effectiveUsed[effectiveUsed.length - 1].alias : firstAlias;
+        out.push(`note over ${firstAlias}, ${lastAlias}`);
+        out.push(`    **${labelText}** — ${sec.title}${subLabel ? ' (part ' + (cIdx + 1) + '/' + effectiveParts.length + ')' : ''}`);
+        out.push('end note');
+        out.push('');
+      }
+
+      out.push(...chunk);
+      out.push('');
+      out.push('@enduml');
+
+      const subLabel = effectiveParts.length > 1 ? String.fromCharCode(97 + cIdx) : '';
+      parts.push({
+        partNum,
+        id: sec.id + subLabel,
+        title: sec.title,
+        puml: out.join('\n'),
+      });
+    }
+  }
+  return parts;
+}
+
+// ---------------------------------------------------------------------------
 // PUML assembly
 // ---------------------------------------------------------------------------
 
-function assemblePuml(header, sectionGroup, partNum, totalParts) {
+function assemblePuml(header, sectionGroup, partNum, totalParts, { label: showLabel = true } = {}) {
   const ids = sectionGroup.map(s => s.id);
-  const label = ids.length === 1 ? `Section ${ids[0]}` : `Sections ${ids[0]}-${ids[ids.length - 1]}`;
-  const titles = sectionGroup.map(s => s.title).filter(Boolean).join(', ');
 
   const { preamble, participants } = parseHeader(header);
   const used = findUsedParticipants(participants, sectionGroup);
@@ -197,12 +298,16 @@ function assemblePuml(header, sectionGroup, partNum, totalParts) {
   for (const p of used) out.push(p.line);
   out.push('');
 
-  const firstAlias = used.length > 0 ? used[0].alias : 'CSR';
-  const lastAlias = used.length > 1 ? used[used.length - 1].alias : firstAlias;
-  out.push(`note over ${firstAlias}, ${lastAlias}`);
-  out.push(`    **Part ${partNum} of ${totalParts}** — ${label}: ${titles}`);
-  out.push(`end note`);
-  out.push('');
+  if (showLabel) {
+    const labelText = ids.length === 1 ? `Section ${ids[0]}` : `Sections ${ids[0]}-${ids[ids.length - 1]}`;
+    const titles = sectionGroup.map(s => s.title).filter(Boolean).join(', ');
+    const firstAlias = used.length > 0 ? used[0].alias : 'CSR';
+    const lastAlias = used.length > 1 ? used[used.length - 1].alias : firstAlias;
+    out.push(`note over ${firstAlias}, ${lastAlias}`);
+    out.push(`    **Part ${partNum} of ${totalParts}** — ${labelText}: ${titles}`);
+    out.push(`end note`);
+    out.push('');
+  }
 
   for (let i = 0; i < sectionGroup.length; i++) {
     out.push(...sectionGroup[i].lines);
@@ -270,45 +375,72 @@ async function main() {
     console.log(`  Section ${s.id.padEnd(4)} ${String(s.lines.length).padStart(4)} lines  ${s.title}`);
   }
 
-  const groups = buildGroups(sections, args.group, args.maxLines);
   const baseName = path.basename(inputPath, path.extname(inputPath));
   const outputDir = path.resolve(args.outputDir || `${path.dirname(inputPath)}/${baseName}_split`);
-
   fs.mkdirSync(outputDir, { recursive: true });
 
   const krokiUrl = args.krokiUrl || 'http://localhost:8000';
   const manifest = [];
 
-  for (let i = 0; i < groups.length; i++) {
-    const group = groups[i];
-    const partNum = i + 1;
-    const ids = group.map(s => s.id);
-    const fileName = `${baseName}_part${partNum}_sec${ids.join('-')}`;
+  if (args.perSection) {
+    const parts = buildPerSectionParts(header, sections, { label: args.label });
+    console.log(`\nPer-section split: ${parts.length} parts (with @split markers)`);
 
-    const puml = assemblePuml(header, group, partNum, groups.length);
-    const pumlPath = path.join(outputDir, `${fileName}.puml`);
-    fs.writeFileSync(pumlPath, puml, 'utf-8');
-    console.log(`  [${partNum}/${groups.length}] Wrote ${pumlPath}`);
+    for (const p of parts) {
+      const fileName = `${baseName}_sec${p.id}`;
+      const pumlPath = path.join(outputDir, `${fileName}.puml`);
+      fs.writeFileSync(pumlPath, p.puml, 'utf-8');
+      console.log(`  [${p.partNum}/${parts.length}] Wrote ${pumlPath}`);
 
-    if (args.png) {
-      try {
-        const png = await fetchPng(krokiUrl, puml);
-        const pngPath = path.join(outputDir, `${fileName}.png`);
-        fs.writeFileSync(pngPath, png);
-        console.log(`  [${partNum}/${groups.length}] Rendered ${pngPath} (${(png.length / 1024).toFixed(0)} KB)`);
-        manifest.push({ part: partNum, sections: ids, puml: pumlPath, png: pngPath });
-      } catch (err) {
-        console.error(`  [${partNum}/${groups.length}] PNG render failed: ${err.message}`);
-        manifest.push({ part: partNum, sections: ids, puml: pumlPath, png: null, error: err.message });
+      if (args.png) {
+        try {
+          const png = await fetchPng(krokiUrl, p.puml);
+          const pngPath = path.join(outputDir, `${fileName}.png`);
+          fs.writeFileSync(pngPath, png);
+          console.log(`  [${p.partNum}/${parts.length}] Rendered ${pngPath} (${(png.length / 1024).toFixed(0)} KB)`);
+          manifest.push({ part: p.partNum, section: p.id, puml: pumlPath, png: pngPath });
+        } catch (err) {
+          console.error(`  [${p.partNum}/${parts.length}] PNG render failed: ${err.message}`);
+          manifest.push({ part: p.partNum, section: p.id, puml: pumlPath, png: null, error: err.message });
+        }
+      } else {
+        manifest.push({ part: p.partNum, section: p.id, puml: pumlPath });
       }
-    } else {
-      manifest.push({ part: partNum, sections: ids, puml: pumlPath });
+    }
+  } else {
+    const groups = buildGroups(sections, args.group, args.maxLines);
+
+    for (let i = 0; i < groups.length; i++) {
+      const group = groups[i];
+      const partNum = i + 1;
+      const ids = group.map(s => s.id);
+      const fileName = `${baseName}_part${partNum}_sec${ids.join('-')}`;
+
+      const puml = assemblePuml(header, group, partNum, groups.length, { label: args.label });
+      const pumlPath = path.join(outputDir, `${fileName}.puml`);
+      fs.writeFileSync(pumlPath, puml, 'utf-8');
+      console.log(`  [${partNum}/${groups.length}] Wrote ${pumlPath}`);
+
+      if (args.png) {
+        try {
+          const png = await fetchPng(krokiUrl, puml);
+          const pngPath = path.join(outputDir, `${fileName}.png`);
+          fs.writeFileSync(pngPath, png);
+          console.log(`  [${partNum}/${groups.length}] Rendered ${pngPath} (${(png.length / 1024).toFixed(0)} KB)`);
+          manifest.push({ part: partNum, sections: ids, puml: pumlPath, png: pngPath });
+        } catch (err) {
+          console.error(`  [${partNum}/${groups.length}] PNG render failed: ${err.message}`);
+          manifest.push({ part: partNum, sections: ids, puml: pumlPath, png: null, error: err.message });
+        }
+      } else {
+        manifest.push({ part: partNum, sections: ids, puml: pumlPath });
+      }
     }
   }
 
   const manifestPath = path.join(outputDir, 'manifest.json');
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
-  console.log(`\nDone. ${groups.length} parts written to ${outputDir}`);
+  console.log(`\nDone. ${manifest.length} parts written to ${outputDir}`);
   console.log(`Manifest: ${manifestPath}`);
 }
 

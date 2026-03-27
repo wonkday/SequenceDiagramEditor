@@ -212,6 +212,8 @@
       <hr>
       <button id="btnSplitPng">Split PNGs (ZIP)</button>
       <button id="btnSectionPng">Section PNGs (ZIP)</button>
+      <hr>
+      <button id="btnToggleSplitMarker" title="Insert/remove a split point at the cursor line (for Section PNGs)">&#9986; Toggle Split Marker</button>
     </div>
   </div>
   <div class="dropdown" id="menuConvert">
@@ -322,6 +324,10 @@
     <label for="cfgSplitMaxLines">Max lines per split group</label>
     <input type="number" id="cfgSplitMaxLines" placeholder="80" min="20" max="500">
     <div class="hint">Controls how many PUML lines per image when using "Split PNGs". Lower = shorter images, more parts. Try 60-100 for Word documents.</div>
+    <label style="display:flex; align-items:center; gap:6px; margin-top:4px; cursor:pointer;">
+      <input type="checkbox" id="cfgSplitLabel" checked> Show part label note on split diagrams
+    </label>
+    <div class="hint">When enabled, each split image includes a "Part X of Y — Section ..." note at the top.</div>
     <div class="modal-actions">
       <button id="btnSettingsCancel">Cancel</button>
       <button id="btnSettingsReset">Reset Defaults</button>
@@ -398,6 +404,10 @@
   }
   function getSplitMaxLines() {
     return parseInt(localStorage.getItem('puml-split-max-lines'), 10) || DEFAULT_SPLIT_MAX_LINES;
+  }
+  function getSplitLabel() {
+    const v = localStorage.getItem('puml-split-label');
+    return v === null ? true : v === '1';
   }
 
   // --- Base64url helpers ---
@@ -518,11 +528,68 @@
     lineWrapping: false,
     theme: 'default',
     foldGutter: { rangeFinder: pumlFoldFinder },
-    gutters: ['CodeMirror-linenumbers', 'CodeMirror-foldgutter'],
+    gutters: ['CodeMirror-linenumbers', 'CodeMirror-foldgutter', 'split-markers'],
     extraKeys: { 'Ctrl-Q': function(cm) { cm.foldCode(cm.getCursor(), pumlFoldFinder); } },
   });
 
   const BLANK_DIAGRAM = `@startuml\n\n@enduml`;
+
+  // --- Split markers (breakpoint-style gutter) ---
+  const PUML_SPLIT_RE = /^'\s*@split/i;
+
+  function makeSplitIcon() {
+    const el = document.createElement('div');
+    el.className = 'split-marker-icon';
+    el.textContent = '\u2702';
+    el.title = 'Split point (click to remove)';
+    return el;
+  }
+
+  function updateSplitMarkers() {
+    cm.clearGutter('split-markers');
+    cm.eachLine(function(lineHandle) {
+      const text = lineHandle.text.trim();
+      if (PUML_SPLIT_RE.test(text)) {
+        cm.setGutterMarker(lineHandle, 'split-markers', makeSplitIcon());
+        cm.addLineClass(lineHandle, 'background', 'split-marker-line');
+      } else {
+        cm.removeLineClass(lineHandle, 'background', 'split-marker-line');
+      }
+    });
+  }
+
+  function toggleSplitMarker(lineNum) {
+    const nextLine = lineNum + 1;
+    if (nextLine < cm.lineCount()) {
+      const nextText = cm.getLine(nextLine).trim();
+      if (PUML_SPLIT_RE.test(nextText)) {
+        cm.replaceRange('', { line: nextLine, ch: 0 }, { line: nextLine + 1, ch: 0 });
+        updateSplitMarkers();
+        return;
+      }
+    }
+    const currentText = cm.getLine(lineNum).trim();
+    if (PUML_SPLIT_RE.test(currentText)) {
+      cm.replaceRange('', { line: lineNum, ch: 0 }, { line: lineNum + 1, ch: 0 });
+      updateSplitMarkers();
+      return;
+    }
+    const indent = cm.getLine(lineNum).match(/^(\s*)/)[1];
+    cm.replaceRange(indent + "' @split\n", { line: nextLine, ch: 0 });
+    updateSplitMarkers();
+  }
+
+  cm.on('gutterClick', function(cm, line, gutter) {
+    if (gutter === 'split-markers') toggleSplitMarker(line);
+  });
+
+  cm.on('changes', function() { updateSplitMarkers(); });
+
+  $('btnToggleSplitMarker').onclick = () => {
+    const line = cm.getCursor().line;
+    toggleSplitMarker(line);
+    cm.focus();
+  };
 
   // --- Load from URL hash or localStorage ---
   async function initContent() {
@@ -999,10 +1066,13 @@
 
       const out = [...preamble];
       for (const p of used) out.push(p.line);
-      out.push('',
-        `note over ${firstAlias}, ${lastAlias}`,
-        `    **Part ${idx + 1} of ${groups.length}** — ${label}: ${titles}`,
-        `end note`, '');
+      out.push('');
+      if (getSplitLabel()) {
+        out.push(
+          `note over ${firstAlias}, ${lastAlias}`,
+          `    **Part ${idx + 1} of ${groups.length}** — ${label}: ${titles}`,
+          `end note`, '');
+      }
       for (let i = 0; i < group.length; i++) {
         out.push(...group[i].lines);
         if (i < group.length - 1) out.push('');
@@ -1060,27 +1130,80 @@
       while (s.lines.length && /^\s*(\|\|\|)?\s*$/.test(s.lines[s.lines.length - 1])) s.lines.pop();
     }
 
-    return sections.map((sec, idx) => {
-      const content = sec.lines.join('\n');
-      const used = participants.filter(p => {
-        const re = new RegExp('\\b' + p.alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
-        return re.test(content);
-      });
+    const SPLIT_MARKER_RE = /^'\s*@split/i;
+    const BLOCK_START_RE = /^(group|opt|alt|loop|par|break|critical|ref)\b/i;
+    const BLOCK_END_RE = /^end\b/i;
+    const allParts = [];
+    let partCounter = 0;
 
-      const firstAlias = used.length > 0 ? used[0].alias : participants[0]?.alias || 'A';
-      const lastAlias = used.length > 1 ? used[used.length - 1].alias : firstAlias;
-      const label = `Section ${sec.id}`;
+    function balanceChunk(lines) {
+      let depth = 0;
+      const prefix = [];
+      const suffix = [];
+      const firstContent = lines.find(l => l.trim());
+      const startsWithElse = firstContent && /^else\b/i.test(firstContent.trim());
+      for (const l of lines) {
+        const t = l.trim();
+        if (BLOCK_END_RE.test(t)) depth--;
+        if (BLOCK_START_RE.test(t)) depth++;
+      }
+      if (startsWithElse) {
+        prefix.push('alt continued');
+        depth++;
+      }
+      while (depth > 0) { suffix.push('end'); depth--; }
+      while (depth < 0) { prefix.push('group continued'); depth++; }
+      return [...prefix, ...lines, ...suffix];
+    }
 
-      const out = [...preamble];
-      for (const p of used) out.push(p.line);
-      out.push('',
-        `note over ${firstAlias}, ${lastAlias}`,
-        `    **Section ${idx + 1} of ${sections.length}** — ${label}: ${sec.title}`,
-        `end note`, '');
-      out.push(...sec.lines);
-      out.push('', '@enduml');
-      return { partNum: idx + 1, id: sec.id, label, title: sec.title, puml: out.join('\n') };
-    });
+    for (let sIdx = 0; sIdx < sections.length; sIdx++) {
+      const sec = sections[sIdx];
+      const chunks = [[]];
+      for (const line of sec.lines) {
+        if (SPLIT_MARKER_RE.test(line.trim())) {
+          chunks.push([]);
+        } else {
+          chunks[chunks.length - 1].push(line);
+        }
+      }
+      const hasContent = l => {
+        const t = l.trim();
+        return t && t !== '|||' && !SECTION_RE.test(t) && !BLOCK_END_RE.test(t);
+      };
+      const nonEmpty = chunks.filter(c => c.some(hasContent));
+      const subParts = nonEmpty.length > 0 ? nonEmpty : [sec.lines.filter(l => !SPLIT_MARKER_RE.test(l.trim()))];
+
+      for (let cIdx = 0; cIdx < subParts.length; cIdx++) {
+        partCounter++;
+        const rawChunk = subParts[cIdx];
+        const chunk = balanceChunk(rawChunk);
+        const content = chunk.join('\n');
+        const used = participants.filter(p => {
+          const re = new RegExp('\\b' + p.alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+          return re.test(content);
+        });
+        const effectiveUsed = used.length > 0 ? used : participants;
+
+        const firstAlias = effectiveUsed.length > 0 ? effectiveUsed[0].alias : 'A';
+        const lastAlias = effectiveUsed.length > 1 ? effectiveUsed[effectiveUsed.length - 1].alias : firstAlias;
+        const subLabel = subParts.length > 1 ? String.fromCharCode(97 + cIdx) : '';
+        const label = `Section ${sec.id}${subLabel}`;
+
+        const out = [...preamble];
+        for (const p of effectiveUsed) out.push(p.line);
+        out.push('');
+        if (getSplitLabel()) {
+          out.push(
+            `note over ${firstAlias}, ${lastAlias}`,
+            `    **${label}** — ${sec.title}${subLabel ? ' (part ' + (cIdx + 1) + '/' + subParts.length + ')' : ''}`,
+            `end note`, '');
+        }
+        out.push(...chunk);
+        out.push('', '@enduml');
+        allParts.push({ partNum: partCounter, id: sec.id + subLabel, label, title: sec.title, puml: out.join('\n') });
+      }
+    }
+    return allParts;
   }
 
   $('btnSplitPng').onclick = async () => {
@@ -1180,6 +1303,7 @@
       } catch (e) {
         failed++;
         console.error(`Failed to render section ${p.id}:`, e);
+        console.debug(`Generated PUML for ${p.id}:\n`, p.puml);
       }
       zip.file(`${baseName}_sec${p.id}.puml`, p.puml);
     }
@@ -1470,6 +1594,7 @@
   const cfgShareMode = $('cfgShareMode');
   const cfgShareLimit = $('cfgShareLimit');
   const cfgSplitMaxLines = $('cfgSplitMaxLines');
+  const cfgSplitLabel = $('cfgSplitLabel');
 
   $('btnSettings').onclick = () => {
     cfgKrokiUrl.value = getKrokiUrl();
@@ -1477,6 +1602,7 @@
     cfgShareMode.value = getShareMode();
     cfgShareLimit.value = getShareLimit();
     cfgSplitMaxLines.value = getSplitMaxLines();
+    cfgSplitLabel.checked = getSplitLabel();
     settingsModal.classList.add('open');
   };
 
@@ -1492,6 +1618,7 @@
     cfgShareMode.value = DEFAULT_SHARE_MODE;
     cfgShareLimit.value = DEFAULT_SHARE_LIMIT;
     cfgSplitMaxLines.value = DEFAULT_SPLIT_MAX_LINES;
+    cfgSplitLabel.checked = true;
   };
 
   $('btnSettingsSave').onclick = () => {
@@ -1508,6 +1635,7 @@
     const splitMax = parseInt(cfgSplitMaxLines.value, 10);
     if (splitMax > 0) localStorage.setItem('puml-split-max-lines', splitMax);
     else localStorage.removeItem('puml-split-max-lines');
+    localStorage.setItem('puml-split-label', cfgSplitLabel.checked ? '1' : '0');
     settingsModal.classList.remove('open');
     setStatus('Settings saved', 'ok');
   };

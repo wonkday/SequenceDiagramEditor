@@ -98,13 +98,24 @@
   }
   .resizer:hover, .resizer.active { background: var(--accent); }
 
-  /* Zoom indicator */
-  .zoom-indicator {
-    position: absolute; bottom: 12px; right: 12px;
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 4px; padding: 3px 8px; font-size: 11px;
-    opacity: .8;
+  /* Zoom bar in header */
+  .zoom-bar {
+    display: flex; align-items: center; gap: 4px;
+    margin-left: auto; margin-right: 8px;
   }
+  .zoom-bar button {
+    background: none; border: 1px solid var(--border); color: var(--text);
+    width: 22px; height: 22px; border-radius: 3px; font-size: 14px;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    padding: 0; line-height: 1;
+  }
+  .zoom-bar button:hover { background: var(--hover); }
+  .zoom-bar input.zoom-input {
+    width: 48px; text-align: center; border: 1px solid var(--border);
+    border-radius: 3px; background: var(--bg); color: var(--text);
+    font-size: 11px; padding: 2px 2px; font-family: inherit;
+  }
+  .zoom-bar input.zoom-input:focus { outline: none; border-color: var(--accent); }
 
   /* File list sidebar */
   .file-sidebar {
@@ -169,7 +180,7 @@
 
 <!-- Toolbar -->
 <div class="toolbar">
-  <span class="brand" style="display:inline-flex;flex-direction:column;align-items:flex-end;">&#9670; PlantUML Editor<span style="font-size:9px;font-weight:400;opacity:.7;">by Rohit</span></span>
+  <span class="brand" style="display:inline-flex;flex-direction:column;align-items:flex-end;">&#9670; PlantUML Editor<span style="font-size:9px;font-weight:400;opacity:.7;">by Wonkday</span></span>
   <div class="sep"></div>
   <button id="btnNew" title="New diagram (reset editor)">&#128196; New</button>
   <button id="btnFiles" title="Browse .puml files">&#128193; Files</button>
@@ -227,6 +238,12 @@
   <div class="preview-pane" id="previewPane">
     <div class="pane-header">
       <span>preview</span>
+      <div class="zoom-bar">
+        <button id="btnZoomOut2" title="Zoom out">&#8722;</button>
+        <input type="text" class="zoom-input" id="zoomInput" value="100%" title="Type zoom % and press Enter">
+        <button id="btnZoomIn2" title="Zoom in">&#43;</button>
+        <button id="btnFit2" title="Fit to view" style="font-size:11px; width:auto; padding:0 6px;">Fit</button>
+      </div>
       <div class="controls">
         <button id="btnCollapsePreview" class="collapse-btn" title="Collapse preview (maximize editor)">&#9658;</button>
         <span id="diagramInfo" style="font-weight:400; text-transform:none;"></span>
@@ -382,6 +399,8 @@ FE --> User : Display
   cm.on('change', scheduleRender);
 
   // --- Zoom ---
+  const zoomInput = $('zoomInput');
+
   function setZoom(z) {
     zoom = Math.max(0.1, Math.min(5, z));
     const svg = previewWrap.querySelector('svg');
@@ -390,14 +409,10 @@ FE --> User : Display
   }
 
   function updateZoomIndicator() {
-    let ind = previewWrap.querySelector('.zoom-indicator');
-    if (!ind) { ind = document.createElement('div'); ind.className = 'zoom-indicator'; previewWrap.appendChild(ind); }
-    ind.textContent = `${Math.round(zoom * 100)}%`;
+    zoomInput.value = `${Math.round(zoom * 100)}%`;
   }
 
-  $('btnZoomIn').onclick = () => setZoom(zoom + 0.15);
-  $('btnZoomOut').onclick = () => setZoom(zoom - 0.15);
-  $('btnFit').onclick = () => {
+  function fitToView() {
     const svg = previewWrap.querySelector('svg');
     if (!svg) return;
     svg.style.transform = 'scale(1)';
@@ -405,7 +420,22 @@ FE --> User : Display
     const wrapRect = previewWrap.getBoundingClientRect();
     const fitZ = Math.min(wrapRect.width / svgRect.width, wrapRect.height / svgRect.height, 2) * 0.95;
     setZoom(fitZ);
-  };
+  }
+
+  $('btnZoomIn').onclick = () => setZoom(zoom + 0.15);
+  $('btnZoomOut').onclick = () => setZoom(zoom - 0.15);
+  $('btnFit').onclick = fitToView;
+  $('btnZoomIn2').onclick = () => setZoom(zoom + 0.15);
+  $('btnZoomOut2').onclick = () => setZoom(zoom - 0.15);
+  $('btnFit2').onclick = fitToView;
+  zoomInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const val = parseInt(zoomInput.value, 10);
+      if (!isNaN(val) && val > 0) setZoom(val / 100);
+      zoomInput.blur();
+    }
+  });
+  zoomInput.addEventListener('blur', () => updateZoomIndicator());
 
   // Mouse wheel zoom on preview
   previewWrap.addEventListener('wheel', (e) => {

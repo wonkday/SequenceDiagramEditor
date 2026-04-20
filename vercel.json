@@ -1,4 +1,11 @@
 {
+  "buildCommand": "",
+  "outputDirectory": "public",
+  "functions": {
+    "api/*.js": {
+      "includeFiles": "lib/**"
+    }
+  },
   "rewrites": [
     { "source": "/", "destination": "/puml.html" },
     { "source": "/mermaid", "destination": "/mermaid.html" },

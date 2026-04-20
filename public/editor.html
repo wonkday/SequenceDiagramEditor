@@ -287,12 +287,20 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/dialog/dialog.min.js"></script>
 <script>
 (function() {
-  const DEFAULT_KROKI_HOST = window.location.hostname || 'ilcepoc3503';
-  const DEFAULT_KROKI_URL = `http://${DEFAULT_KROKI_HOST}:8000/plantuml/svg`;
+  const _host = window.location.hostname || 'localhost';
+  const _isLocal = ['localhost', '127.0.0.1', '', 'ilcepoc3503'].includes(_host) || _host.match(/^(10\.|172\.|192\.168\.)/);
+  const DEFAULT_KROKI_URL = _isLocal
+    ? `http://${_host}:8000/plantuml/svg`
+    : 'https://kroki.io/plantuml/svg';
   const DEFAULT_DEBOUNCE = 800;
 
+  let _deployKrokiUrl = '';
+  fetch('/api/config').then(r => r.json()).then(cfg => {
+    if (cfg.krokiUrl) _deployKrokiUrl = cfg.krokiUrl;
+  }).catch(() => {});
+
   function getKrokiUrl() {
-    return localStorage.getItem('puml-kroki-url') || DEFAULT_KROKI_URL;
+    return localStorage.getItem('puml-kroki-url') || _deployKrokiUrl || DEFAULT_KROKI_URL;
   }
   function getDebounceMs() {
     return parseInt(localStorage.getItem('puml-debounce'), 10) || DEFAULT_DEBOUNCE;

@@ -10,7 +10,7 @@ A web-based diagram editor supporting **PlantUML**, **Mermaid**, and **Gliffy JS
 - **Three-way format conversion** -- PlantUML, Mermaid, and Gliffy JSON, with section marker translation
 - **Section collapse/expand** -- toggle sections in the preview via a side gutter, and fold sections and blocks in the editor
 - **Split PNG export** -- export diagrams as multiple PNGs in a ZIP, split by line count or by individual section
-- **Manual Split PNG export** -- export diagrams as multiple PNGs in a ZIP, split by selecting the line manually (adds '@split' tag)
+- **Manual Split PNG export** -- export diagrams as multiple PNGs in a ZIP, split by selecting the line manually by clicking on desired line in editor section (adds '@split' tag)
 - **Diagram sharing** via URL-encoded links (small diagrams) or server-stored short IDs (large diagrams)
 - **Export** to SVG and PNG
 - **Dark/light theme** toggle, persisted across sessions

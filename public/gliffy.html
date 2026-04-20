@@ -531,7 +531,35 @@
       }
       out.push(lines[i]);
     }
-    return out.join('\n');
+    return sanitizeCollapsedMermaid(out);
+  }
+
+  function sanitizeCollapsedMermaid(lines) {
+    const activeSet = new Set();
+    const fragStack = [];
+    const result = [];
+    for (const line of lines) {
+      const t = line.trim();
+      const actM = t.match(/^\s*(activate|deactivate)\s+(\S+)/i);
+      if (actM) {
+        const action = actM[1].toLowerCase();
+        const who = actM[2];
+        if (action === 'activate') { activeSet.add(who); result.push(line); }
+        else if (activeSet.has(who)) { activeSet.delete(who); result.push(line); }
+        continue;
+      }
+      if (/^\s*(alt|opt|loop|par|critical|break|rect)\b/i.test(t)) { fragStack.push(t); result.push(line); continue; }
+      if (/^\s*else\b/i.test(t)) {
+        if (fragStack.length > 0) result.push(line);
+        continue;
+      }
+      if (/^\s*end\s*$/i.test(t)) {
+        if (fragStack.length > 0) { fragStack.pop(); result.push(line); }
+        continue;
+      }
+      result.push(line);
+    }
+    return result.join('\n');
   }
 
   function findSectionInSvg(svgEl, sec, usedEls) {

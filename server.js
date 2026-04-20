@@ -12,6 +12,12 @@ const storage = createStorage();
 app.use(express.json({ limit: '2mb' }));
 app.use(express.text({ limit: '2mb' }));
 
+app.get('/api/config', (req, res) => {
+  res.json({
+    krokiUrl: process.env.KROKI_URL || '',
+  });
+});
+
 app.get('/', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'puml.html'));
 });

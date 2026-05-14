@@ -15,6 +15,9 @@
 //                        Lower = shorter images, more parts. Ignored when --group is used.
 //   --no-label           Omit the "Part X of Y — Section ..." note from split diagrams
 //   --per-section        Split per section, also sub-splitting at ' @split markers
+//   --header-notes <m>   Where to place top-level context notes (notes above the
+//                        first section). One of: first | all | none.
+//                        Default: first (only show in part 1).
 //
 // Examples:
 //   node scripts/split-puml.js diagram.puml --png
@@ -33,7 +36,7 @@ const https = require('https');
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const args = { png: false, maxLines: 60, label: true, perSection: false };
+  const args = { png: false, maxLines: 60, label: true, perSection: false, headerNotes: 'first' };
   const positional = [];
   for (let i = 2; i < argv.length; i++) {
     switch (argv[i]) {
@@ -44,6 +47,15 @@ function parseArgs(argv) {
       case '--png':          args.png        = true;      break;
       case '--no-label':     args.label      = false;     break;
       case '--per-section':  args.perSection = true;      break;
+      case '--header-notes': {
+        const v = (argv[++i] || '').toLowerCase();
+        if (v !== 'first' && v !== 'all' && v !== 'none') {
+          console.error(`Invalid --header-notes value: ${v}. Must be one of: first, all, none`);
+          process.exit(1);
+        }
+        args.headerNotes = v;
+        break;
+      }
       default:               positional.push(argv[i]);
     }
   }
@@ -163,6 +175,44 @@ function autoGroupByLines(sections, maxLines = 60) {
 
 const PARTICIPANT_RE = /^(participant|actor|database)\s+(?:"[^"]*"\s+as\s+)?(\S+)/i;
 
+const PUML_NOTE_BLOCK_START_RE = /^(?:r|h)?note\s+(?:over|left|right|across)\b(?!.*:)/i;
+const PUML_NOTE_AS_RE = /^(?:r|h)?note\s+(?:as|"[^"]*"\s+as)\b/i;
+const PUML_NOTE_INLINE_RE = /^(?:r|h)?note\s+(?:over|left|right|across|of)\b.*:/i;
+const PUML_NOTE_END_RE = /^end\s*note\b|^endnote\b/i;
+
+function classifyPreamble(preambleLines) {
+  const essential = [];
+  const notes = [];
+  let inBlock = false;
+  let buffer = [];
+  for (const line of preambleLines) {
+    const t = line.trim();
+    if (inBlock) {
+      buffer.push(line);
+      if (PUML_NOTE_END_RE.test(t)) {
+        notes.push(buffer);
+        buffer = [];
+        inBlock = false;
+      }
+    } else if (PUML_NOTE_INLINE_RE.test(t)) {
+      notes.push([line]);
+    } else if (PUML_NOTE_BLOCK_START_RE.test(t) || PUML_NOTE_AS_RE.test(t)) {
+      inBlock = true;
+      buffer = [line];
+    } else {
+      essential.push(line);
+    }
+  }
+  if (inBlock) essential.push(...buffer);
+  return { essential, notes };
+}
+
+function shouldIncludeHeaderNotes(mode, partIndex) {
+  if (mode === 'all') return true;
+  if (mode === 'none') return false;
+  return partIndex === 0;
+}
+
 function parseHeader(header) {
   const preamble = [];
   const participants = [];
@@ -174,7 +224,8 @@ function parseHeader(header) {
       preamble.push(line);
     }
   }
-  return { preamble, participants };
+  const { essential, notes } = classifyPreamble(preamble);
+  return { preamble, essential, notes, participants };
 }
 
 function findUsedParticipants(participants, sectionGroup) {
@@ -192,7 +243,9 @@ function findUsedParticipants(participants, sectionGroup) {
 const SPLIT_MARKER_RE = /^'\s*@split/i;
 
 const BLOCK_START_RE = /^(group|opt|alt|loop|par|break|critical|ref)\b/i;
-const BLOCK_END_RE = /^end\b/i;
+// Match a bare "end" line ONLY (with optional inline comment).
+// Must NOT match "end note", "endif", "end ref", etc.
+const BLOCK_END_RE = /^end\s*(?:'.*)?$/i;
 const SECTION_MARKER_RE = /^==\s+/;
 
 function balanceChunk(lines) {
@@ -232,7 +285,9 @@ function subSplitAtMarkers(section) {
 }
 
 function buildPerSectionParts(header, sections, opts = {}) {
-  const { preamble, participants } = parseHeader(header);
+  const { essential, notes: headerNotes, participants } = parseHeader(header);
+  const headerNotesMode = opts.headerNotes || 'first';
+  const headerNotesContent = headerNotes.flat().join('\n');
   const parts = [];
   let partNum = 0;
 
@@ -242,19 +297,25 @@ function buildPerSectionParts(header, sections, opts = {}) {
 
     for (let cIdx = 0; cIdx < effectiveParts.length; cIdx++) {
       partNum++;
+      const includeNotes = shouldIncludeHeaderNotes(headerNotesMode, partNum - 1);
       const rawChunk = effectiveParts[cIdx];
       const chunk = balanceChunk(rawChunk);
-      const content = chunk.join('\n');
+      const lookupContent = includeNotes ? chunk.join('\n') + '\n' + headerNotesContent : chunk.join('\n');
       const used = participants.filter(p => {
         const re = new RegExp('\\b' + p.alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
-        return re.test(content);
+        return re.test(lookupContent);
       });
       const effectiveUsed = used.length > 0 ? used : participants;
 
       const out = [];
-      out.push(...preamble);
+      out.push(...essential);
       for (const p of effectiveUsed) out.push(p.line);
       out.push('');
+
+      if (includeNotes) {
+        for (const note of headerNotes) out.push(...note);
+        if (headerNotes.length) out.push('');
+      }
 
       if (opts.label !== false) {
         const subLabel = effectiveParts.length > 1 ? String.fromCharCode(97 + cIdx) : '';
@@ -287,16 +348,29 @@ function buildPerSectionParts(header, sections, opts = {}) {
 // PUML assembly
 // ---------------------------------------------------------------------------
 
-function assemblePuml(header, sectionGroup, partNum, totalParts, { label: showLabel = true } = {}) {
+function assemblePuml(header, sectionGroup, partNum, totalParts, { label: showLabel = true, headerNotes: headerNotesMode = 'first' } = {}) {
   const ids = sectionGroup.map(s => s.id);
 
-  const { preamble, participants } = parseHeader(header);
-  const used = findUsedParticipants(participants, sectionGroup);
+  const { essential, notes: headerNotes, participants } = parseHeader(header);
+  const includeNotes = shouldIncludeHeaderNotes(headerNotesMode, partNum - 1);
+  const headerNotesContent = headerNotes.flat().join('\n');
+
+  const sectionContent = sectionGroup.map(s => s.lines.join('\n')).join('\n');
+  const lookupContent = includeNotes ? sectionContent + '\n' + headerNotesContent : sectionContent;
+  const used = participants.filter(p => {
+    const re = new RegExp('\\b' + p.alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+    return re.test(lookupContent);
+  });
 
   const out = [];
-  out.push(...preamble);
+  out.push(...essential);
   for (const p of used) out.push(p.line);
   out.push('');
+
+  if (includeNotes) {
+    for (const note of headerNotes) out.push(...note);
+    if (headerNotes.length) out.push('');
+  }
 
   if (showLabel) {
     const labelText = ids.length === 1 ? `Section ${ids[0]}` : `Sections ${ids[0]}-${ids[ids.length - 1]}`;
@@ -383,7 +457,7 @@ async function main() {
   const manifest = [];
 
   if (args.perSection) {
-    const parts = buildPerSectionParts(header, sections, { label: args.label });
+    const parts = buildPerSectionParts(header, sections, { label: args.label, headerNotes: args.headerNotes });
     console.log(`\nPer-section split: ${parts.length} parts (with @split markers)`);
 
     for (const p of parts) {
@@ -416,7 +490,7 @@ async function main() {
       const ids = group.map(s => s.id);
       const fileName = `${baseName}_part${partNum}_sec${ids.join('-')}`;
 
-      const puml = assemblePuml(header, group, partNum, groups.length, { label: args.label });
+      const puml = assemblePuml(header, group, partNum, groups.length, { label: args.label, headerNotes: args.headerNotes });
       const pumlPath = path.join(outputDir, `${fileName}.puml`);
       fs.writeFileSync(pumlPath, puml, 'utf-8');
       console.log(`  [${partNum}/${groups.length}] Wrote ${pumlPath}`);

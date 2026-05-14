@@ -18,7 +18,37 @@ app.use(express.text({ limit: '2mb' }));
 app.get('/api/config', (req, res) => {
   res.json({
     krokiUrl: process.env.KROKI_URL || '',
+    krokiProxy: true,
   });
+});
+
+function getKrokiBase() {
+  const raw = process.env.KROKI_URL || process.env.KROKI_BASE_URL || 'https://kroki.io';
+  try {
+    const u = new URL(raw);
+    return `${u.protocol}//${u.host}`;
+  } catch (_) {
+    return raw.replace(/\/+$/, '');
+  }
+}
+
+app.post('/api/kroki/:lang/:format', async (req, res) => {
+  const url = `${getKrokiBase()}/${req.params.lang}/${req.params.format}`;
+  try {
+    const body = typeof req.body === 'string'
+      ? req.body
+      : (Buffer.isBuffer(req.body) ? req.body : JSON.stringify(req.body || ''));
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body,
+    });
+    const contentType = resp.headers.get('content-type') || 'application/octet-stream';
+    const buffer = Buffer.from(await resp.arrayBuffer());
+    res.status(resp.status).set('Content-Type', contentType).send(buffer);
+  } catch (e) {
+    res.status(502).json({ error: 'Kroki proxy failed: ' + e.message });
+  }
 });
 
 if (storage) {

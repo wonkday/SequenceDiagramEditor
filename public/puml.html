@@ -199,7 +199,7 @@
 
 <!-- Toolbar -->
 <div class="toolbar-row">
-  <span class="brand"><span class="brand-name">&#9670; Diagram Editor</span><span class="brand-sub">by Wonkday</span></span>
+  <span class="brand"><span class="brand-name">&#9670; Sequence Diagram Editor</span><span class="brand-sub">by Rohit</span></span>
   <a href="/" class="tab active">PlantUML</a>
   <a href="/mermaid" class="tab">Mermaid</a>
   <a href="/gliffy" class="tab">Gliffy</a>
@@ -345,6 +345,13 @@
       <input type="checkbox" id="cfgSplitLabel" checked> Show part label note on split diagrams
     </label>
     <div class="hint">When enabled, each split image includes a "Part X of Y — Section ..." note at the top.</div>
+    <label for="cfgSplitHeaderNotes">Top-level (context) notes in splits</label>
+    <select id="cfgSplitHeaderNotes">
+      <option value="first">First part only (recommended)</option>
+      <option value="all">Repeat in every part</option>
+      <option value="none">Exclude from splits</option>
+    </select>
+    <div class="hint">Controls how notes that appear above the first "== Section ==" marker are handled when exporting split images.</div>
     <div class="modal-actions">
       <button id="btnSettingsCancel">Cancel</button>
       <button id="btnSettingsReset">Reset Defaults</button>
@@ -402,9 +409,11 @@
 (function() {
   const _host = window.location.hostname || 'localhost';
   const _isLocal = ['localhost', '127.0.0.1', '', 'ilcepoc3503'].includes(_host) || _host.match(/^(10\.|172\.|192\.168\.)/);
+  // For remote deployments, default to same-origin proxy at /api/kroki to avoid CORS.
+  // For local deployments, talk to a local Kroki container directly.
   const DEFAULT_KROKI_URL = _isLocal
     ? `http://${_host}:8000/plantuml/svg`
-    : 'https://kroki.io/plantuml/svg';
+    : '/api/kroki/plantuml/svg';
   const DEFAULT_DEBOUNCE = 800;
   const DEFAULT_SHARE_MODE = 'auto';
   const DEFAULT_SHARE_LIMIT = 2000;
@@ -433,6 +442,10 @@
   function getSplitLabel() {
     const v = localStorage.getItem('puml-split-label');
     return v === null ? true : v === '1';
+  }
+  function getSplitHeaderNotes() {
+    const v = localStorage.getItem('puml-split-header-notes');
+    return (v === 'all' || v === 'first' || v === 'none') ? v : 'first';
   }
 
   // --- Base64url helpers ---
@@ -522,23 +535,53 @@
       }
       return null;
     }
-    if (!/^(alt|else|opt|loop|group|par|critical|break)\b/i.test(trimmed)) return null;
-    const isElse = /^else\b/i.test(trimmed);
-    let depth = isElse ? 0 : 1;
-    for (let i = start.line + 1; i < cm.lineCount(); i++) {
-      const l = cm.getLine(i).trim();
-      if (/^(alt|opt|loop|group|par|critical|break)\b/i.test(l)) depth++;
-      if (/^else\b/i.test(l) && depth === (isElse ? 0 : 1)) {
-        return { from: CodeMirror.Pos(start.line, line.length),
-                 to: CodeMirror.Pos(i - 1, cm.getLine(i - 1).length) };
-      }
-      if (/^end\b/i.test(l)) {
-        depth--;
-        if (depth === 0) {
+    if (/^(alt|else|opt|loop|group|par|critical|break)\b/i.test(trimmed)) {
+      const isElse = /^else\b/i.test(trimmed);
+      let depth = isElse ? 0 : 1;
+      for (let i = start.line + 1; i < cm.lineCount(); i++) {
+        const l = cm.getLine(i).trim();
+        if (/^(alt|opt|loop|group|par|critical|break)\b/i.test(l)) depth++;
+        if (/^else\b/i.test(l) && depth === (isElse ? 0 : 1)) {
           return { from: CodeMirror.Pos(start.line, line.length),
-                   to: CodeMirror.Pos(i, cm.getLine(i).length) };
+                   to: CodeMirror.Pos(i - 1, cm.getLine(i - 1).length) };
+        }
+        if (/^end\b/i.test(l)) {
+          depth--;
+          if (depth === 0) {
+            return { from: CodeMirror.Pos(start.line, line.length),
+                     to: CodeMirror.Pos(i, cm.getLine(i).length) };
+          }
         }
       }
+      return null;
+    }
+
+    // Container block: package/node/frame/cloud/database/folder/rectangle/
+    // component/artifact/interface ... { ... }. Used by component, deployment,
+    // and class diagrams. Matches the opening line if it ends with `{` (after
+    // stripping any trailing `'`-line comment), then finds the matching `}` by
+    // brace depth.
+    if (/^(package|node|frame|cloud|database|folder|rectangle|component|artifact|interface|together)\b/i.test(trimmed)) {
+      const stripped = trimmed.replace(/\s*'[^\n]*$/, '').trimEnd();
+      if (!/\{\s*$/.test(stripped)) return null;
+      let depth = 1;
+      for (let i = start.line + 1; i < cm.lineCount(); i++) {
+        const raw = cm.getLine(i);
+        const lt = raw.trim();
+        if (/^'/.test(lt)) continue;
+        const noComment = raw.replace(/'[^\n]*$/, '');
+        for (const ch of noComment) {
+          if (ch === '{') depth++;
+          else if (ch === '}') {
+            depth--;
+            if (depth === 0) {
+              return { from: CodeMirror.Pos(start.line, line.length),
+                       to: CodeMirror.Pos(i, cm.getLine(i).length) };
+            }
+          }
+        }
+      }
+      return null;
     }
     return null;
   };
@@ -680,6 +723,51 @@
   const PUML_SECTION_RE = /^==\s*(.+?)\s*==\s*$/;
   const collapsedSections = new Set();
 
+  // Detect PlantUML diagram kind from the source body. Used to gate
+  // sequence-only UI (Convert, Section PNGs, sequence-specific split headers).
+  // Ordering matters: keywords like `actor`/`database` are legal in both
+  // sequence and component diagrams, so we check component-only signals first.
+  function detectPumlKind(src) {
+    if (!src) return 'unknown';
+    const body = src.replace(/^@startuml[^\n]*\n?/i, '').replace(/@enduml[\s\S]*$/i, '');
+    if (/^\s*(component|package|node|frame|cloud|folder|rectangle|artifact)\b/im.test(body)) return 'component';
+    if (/-(?:up|down|left|right)-+(?:>|\*|o)/i.test(body)) return 'component';
+    if (/\[hidden\]/i.test(body)) return 'component';
+    if (/^\s*(participant|boundary|control|entity|collections|queue)\b/im.test(body)) return 'sequence';
+    if (/^\s*(state\s+\w+|\[\*\]|hide\s+empty\s+description)\b/im.test(body)) return 'state';
+    if (/^\s*(class|abstract|enum|interface)\s+\w+/im.test(body)) return 'class';
+    if (/^\s*:.+;\s*$/m.test(body) || /^\s*(start|stop|fork|repeat|while)\b/im.test(body)) return 'activity';
+    if (/^\s*\S+\s+(->|-->|->>|-->>|-x|--x)\s+\S+\s*:/m.test(body)) return 'sequence';
+    if (/^\s*(actor|database)\b/im.test(body)) return 'sequence';
+    return 'unknown';
+  }
+
+  let currentPumlKind = 'unknown';
+
+  // Toggle sequence-only UI based on the detected diagram kind and whether
+  // section markers exist in the source.
+  function updateKindUi(src) {
+    const isSequence = currentPumlKind === 'sequence' || currentPumlKind === 'unknown';
+    const hasSections = src ? parseSections(src).length > 0 : false;
+
+    const btnMermaid = $('btnConvertMermaid');
+    const btnGliffy = $('btnConvertGliffy');
+    const convertTip = 'Conversion supports sequence diagrams only';
+    if (btnMermaid) {
+      btnMermaid.disabled = !isSequence;
+      btnMermaid.title = isSequence ? '' : convertTip;
+    }
+    if (btnGliffy) {
+      btnGliffy.disabled = !isSequence;
+      btnGliffy.title = isSequence ? '' : convertTip;
+    }
+
+    const btnSectionPng = $('btnSectionPng');
+    if (btnSectionPng) {
+      btnSectionPng.style.display = hasSections ? '' : 'none';
+    }
+  }
+
   function parseSections(source) {
     const lines = source.split(/\r?\n/);
     const sections = [];
@@ -807,7 +895,10 @@
 
   async function render() {
     const src = cm.getValue().trim();
-    if (!src) { previewWrap.innerHTML = ''; setStatus('Empty', ''); return; }
+    if (!src) { previewWrap.innerHTML = ''; setStatus('Empty', ''); updateKindUi(''); return; }
+
+    currentPumlKind = detectPumlKind(src);
+    updateKindUi(src);
 
     const displaySrc = buildSectionCollapsedSource(src, collapsedSections);
 
@@ -1023,6 +1114,48 @@
   const SECTION_RE = /^==\s*Section\s+/i;
   const PARTICIPANT_RE = /^(participant|actor|database)\s+(?:"[^"]*"\s+as\s+)?(\S+)/i;
 
+  // Splits the preamble (everything before the first section, minus participant
+  // declarations) into "essential" lines (title, theme, skinparam, comments,
+  // blanks) and "context note" blocks (top-level notes). Context notes can be
+  // optionally included only in part 1 of split exports to avoid repetition.
+  const PUML_NOTE_BLOCK_START_RE = /^(?:r|h)?note\s+(?:over|left|right|across)\b(?!.*:)/i;
+  const PUML_NOTE_AS_RE = /^(?:r|h)?note\s+(?:as|"[^"]*"\s+as)\b/i;
+  const PUML_NOTE_INLINE_RE = /^(?:r|h)?note\s+(?:over|left|right|across|of)\b.*:/i;
+  const PUML_NOTE_END_RE = /^end\s*note\b|^endnote\b/i;
+
+  function classifyPlantUmlPreamble(preambleLines) {
+    const essential = [];
+    const notes = [];
+    let inBlock = false;
+    let buffer = [];
+    for (const line of preambleLines) {
+      const t = line.trim();
+      if (inBlock) {
+        buffer.push(line);
+        if (PUML_NOTE_END_RE.test(t)) {
+          notes.push(buffer);
+          buffer = [];
+          inBlock = false;
+        }
+      } else if (PUML_NOTE_INLINE_RE.test(t)) {
+        notes.push([line]);
+      } else if (PUML_NOTE_BLOCK_START_RE.test(t) || PUML_NOTE_AS_RE.test(t)) {
+        inBlock = true;
+        buffer = [line];
+      } else {
+        essential.push(line);
+      }
+    }
+    if (inBlock) essential.push(...buffer);
+    return { essential, notes };
+  }
+
+  function shouldIncludeHeaderNotes(mode, partIndex) {
+    if (mode === 'all') return true;
+    if (mode === 'none') return false;
+    return partIndex === 0;
+  }
+
   function splitPumlBySections(source, maxLinesPerGroup) {
     maxLinesPerGroup = maxLinesPerGroup || 80;
     const lines = source.split(/\r?\n/);
@@ -1047,6 +1180,9 @@
         preamble.push(line);
       }
     }
+    const { essential, notes: headerNotes } = classifyPlantUmlPreamble(preamble);
+    const headerNotesMode = getSplitHeaderNotes();
+    const headerNotesContent = headerNotes.flat().join('\n');
 
     const sections = [];
     let current = null;
@@ -1093,23 +1229,35 @@
       const titles = group.map(s => s.title).filter(Boolean).join(', ');
       const label = ids.length === 1 ? `Section ${ids[0]}` : `Sections ${ids.join('-')}`;
 
-      const content = group.map(s => s.lines.join('\n')).join('\n');
+      const includeNotes = shouldIncludeHeaderNotes(headerNotesMode, idx);
+      const sectionContent = group.map(s => s.lines.join('\n')).join('\n');
+      const lookupContent = includeNotes ? sectionContent + '\n' + headerNotesContent : sectionContent;
       const used = participants.filter(p => {
         const re = new RegExp('\\b' + p.alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
-        return re.test(content);
+        return re.test(lookupContent);
       });
 
       const firstAlias = used.length > 0 ? used[0].alias : participants[0]?.alias || 'A';
       const lastAlias = used.length > 1 ? used[used.length - 1].alias : firstAlias;
 
-      const out = [...preamble];
+      const out = [...essential];
       for (const p of used) out.push(p.line);
       out.push('');
+      if (includeNotes) {
+        for (const note of headerNotes) {
+          out.push(...note);
+        }
+        if (headerNotes.length) out.push('');
+      }
       if (getSplitLabel()) {
-        out.push(
-          `note over ${firstAlias}, ${lastAlias}`,
-          `    **Part ${idx + 1} of ${groups.length}** — ${label}: ${titles}`,
-          `end note`, '');
+        if (participants.length > 0) {
+          out.push(
+            `note over ${firstAlias}, ${lastAlias}`,
+            `    **Part ${idx + 1} of ${groups.length}** — ${label}: ${titles}`,
+            `end note`, '');
+        } else {
+          out.push(`' === Part ${idx + 1} of ${groups.length} — ${label}: ${titles} ===`, '');
+        }
       }
       for (let i = 0; i < group.length; i++) {
         out.push(...group[i].lines);
@@ -1143,6 +1291,9 @@
         preamble.push(line);
       }
     }
+    const { essential, notes: headerNotes } = classifyPlantUmlPreamble(preamble);
+    const headerNotesMode = getSplitHeaderNotes();
+    const headerNotesContent = headerNotes.flat().join('\n');
 
     const sections = [];
     let current = null;
@@ -1170,7 +1321,10 @@
 
     const SPLIT_MARKER_RE = /^'\s*@split/i;
     const BLOCK_START_RE = /^(group|opt|alt|loop|par|break|critical|ref)\b/i;
-    const BLOCK_END_RE = /^end\b/i;
+    // Match a bare "end" line ONLY (with optional inline comment).
+    // Must NOT match "end note", "endif", "end ref", etc., since those close
+    // different constructs that don't affect the alt/group/opt/loop nesting depth.
+    const BLOCK_END_RE = /^end\s*(?:'.*)?$/i;
     const allParts = [];
     let partCounter = 0;
 
@@ -1213,12 +1367,13 @@
 
       for (let cIdx = 0; cIdx < subParts.length; cIdx++) {
         partCounter++;
+        const includeNotes = shouldIncludeHeaderNotes(headerNotesMode, partCounter - 1);
         const rawChunk = subParts[cIdx];
         const chunk = balanceChunk(rawChunk);
-        const content = chunk.join('\n');
+        const lookupContent = includeNotes ? chunk.join('\n') + '\n' + headerNotesContent : chunk.join('\n');
         const used = participants.filter(p => {
           const re = new RegExp('\\b' + p.alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
-          return re.test(content);
+          return re.test(lookupContent);
         });
         const effectiveUsed = used.length > 0 ? used : participants;
 
@@ -1227,14 +1382,25 @@
         const subLabel = subParts.length > 1 ? String.fromCharCode(97 + cIdx) : '';
         const label = `Section ${sec.id}${subLabel}`;
 
-        const out = [...preamble];
+        const out = [...essential];
         for (const p of effectiveUsed) out.push(p.line);
         out.push('');
+        if (includeNotes) {
+          for (const note of headerNotes) {
+            out.push(...note);
+          }
+          if (headerNotes.length) out.push('');
+        }
         if (getSplitLabel()) {
-          out.push(
-            `note over ${firstAlias}, ${lastAlias}`,
-            `    **${label}** — ${sec.title}${subLabel ? ' (part ' + (cIdx + 1) + '/' + subParts.length + ')' : ''}`,
-            `end note`, '');
+          const titleSuffix = sec.title + (subLabel ? ' (part ' + (cIdx + 1) + '/' + subParts.length + ')' : '');
+          if (effectiveUsed.length > 0) {
+            out.push(
+              `note over ${firstAlias}, ${lastAlias}`,
+              `    **${label}** — ${titleSuffix}`,
+              `end note`, '');
+          } else {
+            out.push(`' === ${label} — ${titleSuffix} ===`, '');
+          }
         }
         out.push(...chunk);
         out.push('', '@enduml');
@@ -1633,6 +1799,7 @@
   const cfgShareLimit = $('cfgShareLimit');
   const cfgSplitMaxLines = $('cfgSplitMaxLines');
   const cfgSplitLabel = $('cfgSplitLabel');
+  const cfgSplitHeaderNotes = $('cfgSplitHeaderNotes');
 
   $('btnSettings').onclick = () => {
     cfgKrokiUrl.value = getKrokiUrl();
@@ -1641,6 +1808,7 @@
     cfgShareLimit.value = getShareLimit();
     cfgSplitMaxLines.value = getSplitMaxLines();
     cfgSplitLabel.checked = getSplitLabel();
+    cfgSplitHeaderNotes.value = getSplitHeaderNotes();
     settingsModal.classList.add('open');
   };
 
@@ -1657,6 +1825,7 @@
     cfgShareLimit.value = DEFAULT_SHARE_LIMIT;
     cfgSplitMaxLines.value = DEFAULT_SPLIT_MAX_LINES;
     cfgSplitLabel.checked = true;
+    cfgSplitHeaderNotes.value = 'first';
   };
 
   $('btnSettingsSave').onclick = () => {
@@ -1674,6 +1843,7 @@
     if (splitMax > 0) localStorage.setItem('puml-split-max-lines', splitMax);
     else localStorage.removeItem('puml-split-max-lines');
     localStorage.setItem('puml-split-label', cfgSplitLabel.checked ? '1' : '0');
+    localStorage.setItem('puml-split-header-notes', cfgSplitHeaderNotes.value);
     settingsModal.classList.remove('open');
     setStatus('Settings saved', 'ok');
   };

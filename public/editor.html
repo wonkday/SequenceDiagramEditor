@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PlantUML Editor</title>
+<title>Sequence Diagram Editor</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/default.min.css">
@@ -180,7 +180,7 @@
 
 <!-- Toolbar -->
 <div class="toolbar">
-  <span class="brand" style="display:inline-flex;flex-direction:column;align-items:flex-end;">&#9670; PlantUML Editor<span style="font-size:9px;font-weight:400;opacity:.7;">by Wonkday</span></span>
+  <span class="brand" style="display:inline-flex;flex-direction:column;align-items:flex-end;">&#9670; Sequence Diagram Editor<span style="font-size:9px;font-weight:400;opacity:.7;">by Rohit</span></span>
   <div class="sep"></div>
   <button id="btnNew" title="New diagram (reset editor)">&#128196; New</button>
   <button id="btnFiles" title="Browse .puml files">&#128193; Files</button>
@@ -289,9 +289,11 @@
 (function() {
   const _host = window.location.hostname || 'localhost';
   const _isLocal = ['localhost', '127.0.0.1', '', 'ilcepoc3503'].includes(_host) || _host.match(/^(10\.|172\.|192\.168\.)/);
+  // For remote deployments, default to same-origin proxy at /api/kroki to avoid CORS.
+  // For local deployments, talk to a local Kroki container directly.
   const DEFAULT_KROKI_URL = _isLocal
     ? `http://${_host}:8000/plantuml/svg`
-    : 'https://kroki.io/plantuml/svg';
+    : '/api/kroki/plantuml/svg';
   const DEFAULT_DEBOUNCE = 800;
 
   let _deployKrokiUrl = '';

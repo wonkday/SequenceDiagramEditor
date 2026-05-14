@@ -10,7 +10,6 @@ A web-based diagram editor supporting **PlantUML**, **Mermaid**, and **Gliffy JS
 - **Three-way format conversion** -- PlantUML, Mermaid, and Gliffy JSON, with section marker translation
 - **Section collapse/expand** -- toggle sections in the preview via a side gutter, and fold sections and blocks in the editor
 - **Split PNG export** -- export diagrams as multiple PNGs in a ZIP, split by line count or by individual section
-- **Manual Split PNG export** -- export diagrams as multiple PNGs in a ZIP, split by selecting the line manually by clicking on desired line in editor section (adds '@split' tag)
 - **Diagram sharing** via URL-encoded links (small diagrams) or server-stored short IDs (large diagrams)
 - **Export** to SVG and PNG
 - **Dark/light theme** toggle, persisted across sessions
@@ -124,9 +123,13 @@ Use the tab bar at the top to switch between PlantUML, Mermaid, and Gliffy edito
 ### PlantUML Editor (`/`)
 
 - Renders via Kroki (configurable API URL in Settings)
+- Supports **any PlantUML diagram type** -- sequence, component, class, state, activity, deployment, use-case, object, timing, mind map, WBS, gantt, JSON, YAML, etc. Kroki's `/plantuml` endpoint is diagram-agnostic.
 - Supports `.puml`, `.plantuml`, `.pu`, `.txt`, `.wsd` files
 - File browser sidebar for managing multiple diagrams
 - Split export with configurable max lines per group
+- Code folding for both sequence blocks (`alt`, `opt`, `loop`, `group`, ...) and container blocks (`package { ... }`, `node { ... }`, `frame { ... }`, etc.)
+
+> Note: section-based features (Section PNGs, gutter collapse, Convert to Mermaid/Gliffy) target sequence diagrams. They auto-hide or disable for non-sequence sources.
 
 ### Mermaid Editor (`/mermaid`)
 

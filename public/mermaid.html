@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mermaid Sequence Editor</title>
+<title>Mermaid - Sequence Diagram Editor</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/default.min.css">
@@ -159,7 +159,7 @@
 
 <!-- Toolbar -->
 <div class="toolbar-row">
-  <span class="brand"><span class="brand-name">&#9670; Diagram Editor</span><span class="brand-sub">by Wonkday</span></span>
+  <span class="brand"><span class="brand-name">&#9670; Sequence Diagram Editor</span><span class="brand-sub">by Rohit</span></span>
   <a href="/" class="tab">PlantUML</a>
   <a href="/mermaid" class="tab active">Mermaid</a>
   <a href="/gliffy" class="tab">Gliffy</a>
@@ -280,6 +280,13 @@
       <input type="checkbox" id="cfgSplitLabel" checked> Show part label note on split diagrams
     </label>
     <div class="hint">When enabled, each split image includes a "Part X of Y — Section ..." note at the top.</div>
+    <label for="cfgSplitHeaderNotes">Top-level (context) notes in splits</label>
+    <select id="cfgSplitHeaderNotes">
+      <option value="first">First part only (recommended)</option>
+      <option value="all">Repeat in every part</option>
+      <option value="none">Exclude from splits</option>
+    </select>
+    <div class="hint">Controls how notes that appear above the first "%% == Section ==" marker are handled when exporting split images.</div>
     <div class="modal-actions">
       <button id="btnSettingsCancel">Cancel</button>
       <button id="btnSettingsReset">Reset Defaults</button>
@@ -887,6 +894,27 @@
   const DEFAULT_SPLIT_MAX_LINES = 80;
   function getSplitMaxLines() { return parseInt(localStorage.getItem('mmd-split-max-lines'), 10) || DEFAULT_SPLIT_MAX_LINES; }
   function getSplitLabel() { const v = localStorage.getItem('mmd-split-label'); return v === null ? true : v === '1'; }
+  function getSplitHeaderNotes() {
+    const v = localStorage.getItem('mmd-split-header-notes');
+    return (v === 'all' || v === 'first' || v === 'none') ? v : 'first';
+  }
+
+  // Mermaid notes are always single-line: "Note over A,B: text" or "Note left of A: text".
+  const MMD_NOTE_RE = /^\s*Note\s+(?:over|left of|right of)\b.*:/i;
+  function classifyMermaidPreamble(preambleLines) {
+    const essential = [];
+    const notes = [];
+    for (const line of preambleLines) {
+      if (MMD_NOTE_RE.test(line)) notes.push([line]);
+      else essential.push(line);
+    }
+    return { essential, notes };
+  }
+  function shouldIncludeHeaderNotes(mode, partIndex) {
+    if (mode === 'all') return true;
+    if (mode === 'none') return false;
+    return partIndex === 0;
+  }
 
   const SECTION_RE = /^%%\s*==\s*Section\s+/i;
   const MMD_PARTICIPANT_RE = /^\s*participant\s+(\S+)/i;
@@ -939,6 +967,9 @@
         preamble.push(line);
       }
     }
+    const { essential, notes: headerNotes } = classifyMermaidPreamble(preamble);
+    const headerNotesMode = getSplitHeaderNotes();
+    const headerNotesContent = headerNotes.flat().join('\n');
 
     const sections = [];
     let current = null;
@@ -983,14 +1014,19 @@
       const titles = group.map(s => s.title).filter(Boolean).join(', ');
       const label = ids.length === 1 ? `Section ${ids[0]}` : `Sections ${ids.join('-')}`;
 
+      const includeNotes = shouldIncludeHeaderNotes(headerNotesMode, idx);
       const contentLines = group.flatMap(s => s.lines);
-      const used = findUsedAliases(contentLines, participants);
+      const lookupLines = includeNotes ? [...contentLines, ...headerNotes.flat()] : contentLines;
+      const used = findUsedAliases(lookupLines, participants);
 
       const firstAlias = used.length > 0 ? used[0].alias : participants[0]?.alias || 'A';
       const lastAlias = used.length > 1 ? used[used.length - 1].alias : firstAlias;
 
-      const out = [...preamble];
+      const out = [...essential];
       for (const p of used) out.push(p.line);
+      if (includeNotes) {
+        for (const note of headerNotes) out.push(...note);
+      }
       if (getSplitLabel()) {
         out.push(`    Note over ${firstAlias},${lastAlias}: Part ${idx + 1} of ${groups.length} — ${label}: ${titles}`);
       }
@@ -1024,6 +1060,8 @@
         preamble.push(line);
       }
     }
+    const { essential, notes: headerNotes } = classifyMermaidPreamble(preamble);
+    const headerNotesMode = getSplitHeaderNotes();
 
     const sections = [];
     let current = null;
@@ -1049,7 +1087,10 @@
 
     const SPLIT_MARKER_RE = /^%%\s*@split/i;
     const MMD_BLOCK_START = /^\s*(alt|opt|loop|par|critical|break|rect)\b/i;
-    const MMD_BLOCK_END = /^\s*end\b/i;
+    // Match a bare "end" line ONLY (with optional comment). Mermaid notes are
+    // single-line, so this is mostly defensive — but keeps behavior consistent
+    // with PlantUML's fix for "end note" being mis-counted.
+    const MMD_BLOCK_END = /^\s*end\s*(?:%%.*)?$/i;
     const allParts = [];
     let partCounter = 0;
 
@@ -1093,9 +1134,11 @@
 
       for (let cIdx = 0; cIdx < subParts.length; cIdx++) {
         partCounter++;
+        const includeNotes = shouldIncludeHeaderNotes(headerNotesMode, partCounter - 1);
         const rawChunk = subParts[cIdx];
         const chunk = balanceChunk(rawChunk);
-        const used = findUsedAliases(chunk, participants);
+        const lookupLines = includeNotes ? [...chunk, ...headerNotes.flat()] : chunk;
+        const used = findUsedAliases(lookupLines, participants);
         const effectiveUsed = used.length > 0 ? used : participants;
 
         const firstAlias = effectiveUsed.length > 0 ? effectiveUsed[0].alias : 'A';
@@ -1103,8 +1146,11 @@
         const subLabel = subParts.length > 1 ? String.fromCharCode(97 + cIdx) : '';
         const label = `Section ${sec.id}${subLabel}`;
 
-        const out = [...preamble];
+        const out = [...essential];
         for (const p of effectiveUsed) out.push(p.line);
+        if (includeNotes) {
+          for (const note of headerNotes) out.push(...note);
+        }
         if (getSplitLabel()) {
           out.push(`    Note over ${firstAlias},${lastAlias}: ${label} — ${sec.title}${subLabel ? ' (part ' + (cIdx + 1) + '/' + subParts.length + ')' : ''}`);
         }
@@ -1334,12 +1380,14 @@
   const cfgShareLimit = $('cfgShareLimit');
   const cfgSplitMaxLines = $('cfgSplitMaxLines');
   const cfgSplitLabel = $('cfgSplitLabel');
+  const cfgSplitHeaderNotes = $('cfgSplitHeaderNotes');
 
   $('btnSettings').onclick = () => {
     cfgShareMode.value = getShareMode();
     cfgShareLimit.value = getShareLimit();
     cfgSplitMaxLines.value = getSplitMaxLines();
     cfgSplitLabel.checked = getSplitLabel();
+    cfgSplitHeaderNotes.value = getSplitHeaderNotes();
     settingsModal.classList.add('open');
   };
 
@@ -1351,6 +1399,7 @@
     cfgShareLimit.value = DEFAULT_SHARE_LIMIT;
     cfgSplitMaxLines.value = DEFAULT_SPLIT_MAX_LINES;
     cfgSplitLabel.checked = true;
+    cfgSplitHeaderNotes.value = 'first';
   };
 
   $('btnSettingsSave').onclick = () => {
@@ -1360,6 +1409,7 @@
     if (splitMax > 0) localStorage.setItem('mmd-split-max-lines', splitMax);
     else localStorage.removeItem('mmd-split-max-lines');
     localStorage.setItem('mmd-split-label', cfgSplitLabel.checked ? '1' : '0');
+    localStorage.setItem('mmd-split-header-notes', cfgSplitHeaderNotes.value);
     settingsModal.classList.remove('open');
     showToast('Settings saved');
   };
